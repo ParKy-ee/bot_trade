@@ -153,6 +153,7 @@ export function calculateDynamicForexExit({
   const atrPips = atr / pipSize;
   const lookbackBars = Math.max(12, Math.floor(Number(options.lookbackBars || 24)));
   const pivotStrength = Math.max(1, Math.floor(Number(options.pivotStrength || 2)));
+  const entryMode = String(options.entryMode || 'DEFAULT').toUpperCase();
   const dynamicTpMult = options.marketPressure?.pip_projections?.recommended_tp_atr_mult;
   const dynamicSlMult = options.marketPressure?.pip_projections?.recommended_sl_atr_mult;
   const tpAtrMult = Math.max(0.1, Number(options.tpAtrMult ?? dynamicTpMult ?? (entryMode === 'BREAKOUT' ? 1.8 : (entryMode === 'PULLBACK' ? 1.5 : 0.9))));

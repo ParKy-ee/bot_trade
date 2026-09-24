@@ -1227,6 +1227,7 @@ export async function executeForexScanCycle() {
     if (!bars || bars.length < 35) continue;
 
     const lastBar = bars[bars.length - 1];
+    const currPrice = Number(lastBar.close);
     // Predict Market Pressure & Indecision (Microstructure Model)
     let marketPressure = null;
     try {
@@ -1416,6 +1417,21 @@ export async function executeForexScanCycle() {
       reasons.push(`Production score ${liveProductionScore.toFixed(4)} < ${liveProductionConfidenceThreshold.toFixed(4)}`);
     }
 
+    // Market Pressure Bypass & Counter-Pressure Veto Shield
+    const pBuy = Number(marketPressure?.probabilities?.buy_pressure || 0);
+    const pSell = Number(marketPressure?.probabilities?.sell_pressure || 0);
+    const isPressureBypass = (bias === 'BUY' && (pBuy >= 0.40 || marketPressure?.state === 'BUY_PRESSURE'))
+      || (bias === 'SELL' && (pSell >= 0.40 || marketPressure?.state === 'SELL_PRESSURE'));
+    const isCounterPressure = (bias === 'BUY' && pSell >= 0.40)
+      || (bias === 'SELL' && pBuy >= 0.40);
+
+    if (isCounterPressure && isSignal) {
+      isSignal = false;
+      const oppProb = bias === 'BUY' ? pSell : pBuy;
+      reasons.push(`🚫 Counter-Pressure Veto: Market Pressure detected opposite push (${(oppProb * 100).toFixed(0)}%)`);
+      console.log(`🛡️ [COUNTER-PRESSURE VETO] ${symbol.replace('=X', '')}: Opposite push ${(oppProb * 100).toFixed(0)}% -> Veto trade`);
+    }
+
     // Phase 1: Dynamic Symbol Gating & Regime Filtering
     const gatingEnabled = process.env.FOREX_GATING_ENABLED !== 'false';
     let gatingPassed = true;
@@ -1437,21 +1453,6 @@ export async function executeForexScanCycle() {
       // If Track 2 (SQUEEZE_BREAKOUT) or Track 3 (PULLBACK_DIP) fired with strong confluence (>= 60),
       // do NOT block the early-stage breakout by ADX!
       const isConfluenceBypass = (activeTrack === 'SQUEEZE_BREAKOUT' || activeTrack === 'PULLBACK_DIP') && (confluenceScore >= 60);
-
-      // Market Pressure Bypass & Counter-Pressure Veto Shield
-      const pBuy = Number(marketPressure?.probabilities?.buy_pressure || 0);
-      const pSell = Number(marketPressure?.probabilities?.sell_pressure || 0);
-      const isPressureBypass = (bias === 'BUY' && (pBuy >= 0.40 || marketPressure?.state === 'BUY_PRESSURE'))
-        || (bias === 'SELL' && (pSell >= 0.40 || marketPressure?.state === 'SELL_PRESSURE'));
-      const isCounterPressure = (bias === 'BUY' && pSell >= 0.40)
-        || (bias === 'SELL' && pBuy >= 0.40);
-
-      if (isCounterPressure && isSignal) {
-        isSignal = false;
-        const oppProb = bias === 'BUY' ? pSell : pBuy;
-        reasons.push(`🚫 Counter-Pressure Veto: Market Pressure detected opposite push (${(oppProb * 100).toFixed(0)}%)`);
-        console.log(`🛡️ [COUNTER-PRESSURE VETO] ${symbol.replace('=X', '')}: Opposite push ${(oppProb * 100).toFixed(0)}% -> Veto trade`);
-      }
 
       if (isPressureBypass && !isConfluenceBypass && gatingPassed) {
         reasons.push(`⚡ Pressure Bypass: Market Pressure confirms directional momentum (${bias === 'BUY' ? (pBuy * 100).toFixed(0) : (pSell * 100).toFixed(0)}%) -> Bypassing ADX/CSM lag`);
