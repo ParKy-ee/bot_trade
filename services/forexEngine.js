@@ -238,8 +238,10 @@ function evaluatePocketProductionGuard({
     }
   }
 
-  const sessionGuard = checkForexSessionGuard();
-  if (sessionGuard.blocked) reasons.push(sessionGuard.reason);
+  if (!DATA_HARVEST_LIVE_MODE && process.env.FOREX_SESSION_GUARD_ENABLED !== 'false') {
+    const sessionGuard = checkForexSessionGuard();
+    if (sessionGuard.blocked) reasons.push(sessionGuard.reason);
+  }
 
   return {
     passed: reasons.length === 0,
