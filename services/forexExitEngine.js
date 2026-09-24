@@ -287,3 +287,77 @@ export function calculateDynamicForexExit({
     expectedNetPips: options.marketPressure?.pip_projections?.expected_net_pips ?? null
   };
 }
+
+/**
+ * Evaluates whether an open position should be closed early due to adverse Market Pressure
+ * (Tier 1: Profit Lock or Tier 2: Early Cut / Loss Minimizer).
+ */
+export function evaluateAdversePressureExit({
+  action,
+  currClose,
+  entryPrice,
+  pipSize,
+  marketPressure,
+  holdMinutes = 0
+} = {}) {
+  const isEnabled = process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false';
+  if (!isEnabled || !marketPressure || !marketPressure.probabilities) {
+    return { shouldExit: false };
+  }
+
+  const minHoldMinutes = Number(process.env.FOREX_PRESSURE_MIN_HOLD_MINUTES || 3);
+  if (holdMinutes < minHoldMinutes) {
+    return { shouldExit: false };
+  }
+
+  const isBuy = String(action || '').toUpperCase() === 'BUY';
+  const profitPips = isBuy
+    ? (currClose - entryPrice) / pipSize
+    : (entryPrice - currClose) / pipSize;
+
+  const adverseProb = isBuy
+    ? Number(marketPressure.probabilities.sell_pressure || 0)
+    : Number(marketPressure.probabilities.buy_pressure || 0);
+
+  const adverseState = isBuy
+    ? marketPressure.state === 'SELL_PRESSURE'
+    : marketPressure.state === 'BUY_PRESSURE';
+
+  const expNetPips = Number(marketPressure.pip_projections?.expected_net_pips || 0);
+  const adverseFlowPips = isBuy ? -expNetPips : expNetPips; // positive means moving against our position
+
+  // Tier 1: Profit Lock (Positive floating pips >= profitLockMinPips, and adverse pressure pushes against us)
+  // Lock in gains before price drops back to breakeven or into loss!
+  const profitLockMinPips = Number(process.env.FOREX_PRESSURE_PROFIT_LOCK_PIPS || 1.0);
+  const adverseThreshold = Number(process.env.FOREX_PRESSURE_ADVERSE_THRESHOLD || 0.45);
+
+  if (profitPips >= profitLockMinPips && (adverseProb >= adverseThreshold || (adverseState && adverseProb >= 0.40))) {
+    return {
+      shouldExit: true,
+      exitReason: 'CLOSED_PRESSURE_PROFIT_LOCK',
+      profitPips: Number(profitPips.toFixed(2)),
+      adverseProb,
+      adverseFlowPips: Number(adverseFlowPips.toFixed(2)),
+      reason: `พบแรงสวนทาง ${(adverseProb * 100).toFixed(0)}% (${isBuy ? 'Sell' : 'Buy'} Pressure) ขณะมีกำไร +${profitPips.toFixed(1)} pips -> ปิดล็อกกำไรทันที!`
+    };
+  }
+
+  // Tier 2: Early Cut / Loss Minimizer (Negative floating pips, but way before full Hard SL)
+  // If floating between -1.5 and -8.0 pips, and adverse pressure confirms strong reversal
+  const earlyCutTriggerPips = Number(process.env.FOREX_PRESSURE_EARLY_CUT_PIPS || -1.5);
+  const severeAdverseThreshold = Number(process.env.FOREX_PRESSURE_SEVERE_THRESHOLD || 0.48);
+
+  if (profitPips <= earlyCutTriggerPips && (adverseProb >= severeAdverseThreshold || (adverseState && adverseFlowPips >= 0.5))) {
+    return {
+      shouldExit: true,
+      exitReason: 'CLOSED_PRESSURE_EARLY_CUT',
+      profitPips: Number(profitPips.toFixed(2)),
+      adverseProb,
+      adverseFlowPips: Number(adverseFlowPips.toFixed(2)),
+      reason: `พบแรงสวนรุนแรง ${(adverseProb * 100).toFixed(0)}% (${isBuy ? 'Sell' : 'Buy'} Pressure Flow: ${adverseFlowPips.toFixed(1)}p) ขณะติดลบ ${profitPips.toFixed(1)} pips -> ชิงตัดขาดทุนทิ้ง เซฟระยะก่อนโดน Hard SL!`
+    };
+  }
+
+  return { shouldExit: false };
+}
+

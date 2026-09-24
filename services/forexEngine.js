@@ -6,7 +6,7 @@ import { placeOrder, placePendingOrder, getPendingOrders, cancelPendingOrder, mo
 import { recordTradeEntry, recordTradeExit, syncMt5PositionsWithDatabase } from './tradeResultTracker.js';
 import { predictForexConfidence, predictForexChallengerConfidence, predictForexRangeConfidence, predictForexExitChallenger, predictForexMarketPressure } from './modelPredictor.js';
 import { reviewTradeWithGemini } from './geminiReviewer.js';
-import { calculateDynamicForexExit, validateForexExitGeometry } from './forexExitEngine.js';
+import { calculateDynamicForexExit, validateForexExitGeometry, evaluateAdversePressureExit } from './forexExitEngine.js';
 import { calculateCurrencyStrength, getPairCsmSpread } from './currencyStrength.js';
 import { checkOverextension, checkRejectionCandle, checkCompressionBreakout, calculatePullbackLevel } from './forexPriceAction.js';
 import { evaluateRangeExpertSetup } from './forexRangeExpert.js';
@@ -346,7 +346,35 @@ async function evaluatePocketShadowTrades({ pool, rawData } = {}) {
         ? (currClose - entryPrice) * pipMult
         : (entryPrice - currClose) * pipMult;
 
-      // 1. Intra-Trade Exit Challenger Evaluation (Active after at least 2 bars / 10 mins)
+      // 1. Market Pressure Active Exit Evaluation (Adverse Pressure / Early Cut / Profit Lock)
+      if (process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false') {
+        try {
+          const shadowPressure = await predictForexMarketPressure(bars, trade.symbol);
+          const pressureExit = evaluateAdversePressureExit({
+            action,
+            currClose,
+            entryPrice,
+            pipSize: 1.0 / pipMult,
+            marketPressure: shadowPressure,
+            holdMinutes: holdMin
+          });
+          if (pressureExit.shouldExit) {
+            await recordTradeExit({
+              ticket: null,
+              symbol: trade.symbol,
+              exitPrice: currClose,
+              exitReason: pressureExit.exitReason,
+              tradeResultId: trade.id
+            });
+            console.log(`🛡️ [SHADOW PRESSURE EXIT] ${trade.symbol} (${action}): ${pressureExit.reason}`);
+            continue;
+          }
+        } catch (pErr) {
+          console.warn(`⚠️ [MarketPressureExit] Error on shadow ${trade.symbol}:`, pErr.message);
+        }
+      }
+
+      // 2. Intra-Trade Exit Challenger Evaluation (Active after at least 2 bars / 10 mins)
       if (holdMin >= 10 && bars.length >= 2) {
         try {
           const entryTimeMs = new Date(trade.entry_time).getTime();
@@ -665,6 +693,45 @@ export async function executeForexScanCycle() {
       const microBeTriggerPips = Number(process.env.FOREX_MICRO_BE_TRIGGER_PIPS || 2.5);
       const stepdownMaxMinutes = Number(process.env.FOREX_STEPDOWN_MAX_MINUTES || 25);
       const stepdownMinPips = Number(process.env.FOREX_STEPDOWN_MIN_PIPS || 2.0);
+      // Active Market Pressure Guardian: Check for adverse momentum reversal (Profit Lock or Early Cut)
+      if (process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false') {
+        try {
+          const livePressure = await predictForexMarketPressure(bars, pos.symbol);
+          const liveAction = isShort ? 'SELL' : 'BUY';
+          const pressureExit = evaluateAdversePressureExit({
+            action: liveAction,
+            currClose: currPrice,
+            entryPrice,
+            pipSize,
+            marketPressure: livePressure,
+            holdMinutes
+          });
+
+          if (pressureExit.shouldExit) {
+            console.log(`🛡️ [PRESSURE ACTIVE EXIT] ${pos.symbol} (${liveAction}): ${pressureExit.reason}`);
+            if (isMt5Live) {
+              try {
+                await closePosition(pos.mt5_ticket);
+              } catch (e) {
+                console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message);
+              }
+            }
+            await pool.query(
+              "UPDATE active_positions SET status_note = ? WHERE symbol = ? AND market_type = 'forex'",
+              [pressureExit.exitReason, pos.symbol]
+            );
+            await recordTradeExit({
+              ticket: pos.mt5_ticket,
+              symbol: pos.symbol,
+              exitPrice: currPrice,
+              exitReason: pressureExit.exitReason
+            });
+            continue;
+          }
+        } catch (pressureErr) {
+          console.warn(`⚠️ Error evaluating market pressure exit for ${pos.symbol}:`, pressureErr.message);
+        }
+      }
 
       if (isShort) {
         newHighest = Math.min(newHighest, currPrice); // stores lowest reached price
@@ -1146,6 +1213,25 @@ export async function executeForexScanCycle() {
         let exitPrice = currClose;
 
         const spreadBuffer = (isJpy ? 1.8 : 1.2) * pipSize;
+
+        // Market Pressure Active Exit Evaluation (Profit Lock or Early Cut)
+        if (process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false') {
+          try {
+            const shadowPressure = await predictForexMarketPressure(bars, shadow.symbol);
+            const pExit = evaluateAdversePressureExit({
+              action: shadow.action,
+              currClose,
+              entryPrice,
+              pipSize,
+              marketPressure: shadowPressure,
+              holdMinutes: holdMin
+            });
+            if (pExit.shouldExit) {
+              exitReason = pExit.exitReason;
+              console.log(`🛡️ [SHADOW PRESSURE EXIT] ${shadow.symbol} (${shadow.action}): ${pExit.reason}`);
+            }
+          } catch (e) {}
+        }
 
         if (shadow.action === 'BUY') {
           const maxProfitPips = (currHigh - entryPrice) / pipSize;
