@@ -103,9 +103,10 @@ export function calculateSupertrend(highs, lows, closes, period = 10, multiplier
  * @param {Array} pairBars Array of OHLCV bars for the currency pair
  * @param {Array} dxyBars Array of OHLCV bars for US Dollar Index (DX-Y.NYB)
  * @param {string} symbol Currency pair symbol, e.g. 'EURUSD=X'
+ * @param {Object} options Optional settings including marketPressure
  * @returns {Object} Filter assessment result
  */
-export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol) {
+export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol, options = {}) {
   const n = pairBars ? pairBars.length : 0;
   if (n < 35) {
     return {
@@ -261,6 +262,23 @@ export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol) {
 
   if (rsi9 >= 25 && rsi9 <= 55) sellScore += 8;
   if (stochK < stochD || stochCrossDown) sellScore += 7;
+
+  // Market Pressure Confluence Booster & Counter-Pressure Penalty
+  if (options.marketPressure) {
+    const pBuy = Number(options.marketPressure?.probabilities?.buy_pressure || 0);
+    const pSell = Number(options.marketPressure?.probabilities?.sell_pressure || 0);
+    if (pBuy >= 0.40) buyScore += 8;
+    if (pBuy >= 0.50) buyScore += 4;
+    if (pSell >= 0.40) sellScore += 8;
+    if (pSell >= 0.50) sellScore += 4;
+
+    // Counter-pressure soft penalty
+    if (pSell >= 0.40) buyScore = Math.max(0, buyScore - 12);
+    if (pBuy >= 0.40) sellScore = Math.max(0, sellScore - 12);
+  }
+
+  buyScore = Math.min(100, Math.max(0, buyScore));
+  sellScore = Math.min(100, Math.max(0, sellScore));
 
   // ================= MACRO DXY DIRECTIONAL CALIBRATION =================
   const cleanSym = String(symbol || '').replace('=X', '').toUpperCase();

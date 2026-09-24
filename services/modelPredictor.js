@@ -15,6 +15,7 @@ const FOREX_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_bridge.py
 const FOREX_CHALLENGER_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_challenger_bridge.py');
 const FOREX_RANGE_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_range_bridge.py');
 const FOREX_EXIT_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_exit_bridge.py');
+const FOREX_MARKET_PRESSURE_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_market_pressure_bridge.py');
 const CRYPTO_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_crypto_bridge.py');
 const GOLD_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_gold_bridge.py');
 
@@ -68,6 +69,11 @@ export async function predictForexRangeConfidence(featuresObj) {
 /** Predicts dynamic exit action (HOLD, EARLY_CUT, STALL_HARVEST) using the Exit Challenger model. */
 export async function predictForexExitChallenger(featuresObj) {
   return runPythonModelPredict(featuresObj, FOREX_EXIT_BRIDGE_PATH, 'Forex Exit Challenger');
+}
+
+/** Predicts Market Pressure & Indecision (Buy Pressure, Sell Pressure, Indecision, and Dynamic Pip Projections). */
+export async function predictForexMarketPressure(bars, symbol = 'EURUSD=X') {
+  return runPythonModelPredict({ bars, symbol }, FOREX_MARKET_PRESSURE_BRIDGE_PATH, 'Forex Market Pressure');
 }
 
 /**

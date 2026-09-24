@@ -153,9 +153,10 @@ export function calculateDynamicForexExit({
   const atrPips = atr / pipSize;
   const lookbackBars = Math.max(12, Math.floor(Number(options.lookbackBars || 24)));
   const pivotStrength = Math.max(1, Math.floor(Number(options.pivotStrength || 2)));
-  const entryMode = String(options.entryMode || 'DEFAULT').toUpperCase();
-  const tpAtrMult = Math.max(0.1, Number(options.tpAtrMult ?? (entryMode === 'BREAKOUT' ? 1.8 : (entryMode === 'PULLBACK' ? 1.5 : 0.9))));
-  const slAtrMult = Math.max(0.1, Number(options.slAtrMult ?? 0.8));
+  const dynamicTpMult = options.marketPressure?.pip_projections?.recommended_tp_atr_mult;
+  const dynamicSlMult = options.marketPressure?.pip_projections?.recommended_sl_atr_mult;
+  const tpAtrMult = Math.max(0.1, Number(options.tpAtrMult ?? dynamicTpMult ?? (entryMode === 'BREAKOUT' ? 1.8 : (entryMode === 'PULLBACK' ? 1.5 : 0.9))));
+  const slAtrMult = Math.max(0.1, Number(options.slAtrMult ?? dynamicSlMult ?? 0.8));
   const bufferAtrFraction = Math.max(0, Number(options.bufferAtrFraction ?? 0.1));
   const minBufferPips = Math.max(0, Number(options.minBufferPips ?? 1));
   const spreadPips = Math.max(0, Number(options.spreadPips || 0));
@@ -280,6 +281,8 @@ export function calculateDynamicForexExit({
     bufferPips,
     effectiveMinTpPips,
     lookbackBars,
-    pivotStrength
+    pivotStrength,
+    marketPressure: options.marketPressure || null,
+    expectedNetPips: options.marketPressure?.pip_projections?.expected_net_pips ?? null
   };
 }

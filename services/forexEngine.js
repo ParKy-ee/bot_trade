@@ -4,7 +4,7 @@ import { evaluateForexFirstStageFilter } from './forexFilter.js';
 import { sendTelegramAlert } from './telegramAlert.js';
 import { placeOrder, placePendingOrder, getPendingOrders, cancelPendingOrder, modifyStopLoss, closePosition, getRates, getOpenPositions } from './mt5Broker.js';
 import { recordTradeEntry, recordTradeExit, syncMt5PositionsWithDatabase } from './tradeResultTracker.js';
-import { predictForexConfidence, predictForexChallengerConfidence, predictForexRangeConfidence, predictForexExitChallenger } from './modelPredictor.js';
+import { predictForexConfidence, predictForexChallengerConfidence, predictForexRangeConfidence, predictForexExitChallenger, predictForexMarketPressure } from './modelPredictor.js';
 import { reviewTradeWithGemini } from './geminiReviewer.js';
 import { calculateDynamicForexExit, validateForexExitGeometry } from './forexExitEngine.js';
 import { calculateCurrencyStrength, getPairCsmSpread } from './currencyStrength.js';
@@ -192,10 +192,16 @@ function evaluatePocketProductionGuard({
   indicators,
   csmSpread,
   atr,
-  isJpy
+  isJpy,
+  isPressureBypass = false,
+  isCounterPressure = false
 } = {}) {
   const reasons = [];
   const direction = String(bias || '').toUpperCase();
+
+  if (isCounterPressure) {
+    reasons.push('market pressure detected strong opposite push (Counter-Pressure Shield)');
+  }
 
   if (!qualified || !['BUY', 'SELL'].includes(direction)) {
     reasons.push('first-stage filter did not qualify the setup');
@@ -215,8 +221,8 @@ function evaluatePocketProductionGuard({
     : Number(process.env.FOREX_GATING_MIN_CSM_MAJOR || 0.2);
   const currentAdx = Number(indicators?.adx14 || 0);
   const absCsm = Math.abs(Number(csmSpread || 0));
-  const isConfluenceBypass = (activeTrack === 'SQUEEZE_BREAKOUT' || activeTrack === 'PULLBACK_DIP')
-    && Number(confluenceScore || 0) >= 60;
+  const isConfluenceBypass = ((activeTrack === 'SQUEEZE_BREAKOUT' || activeTrack === 'PULLBACK_DIP')
+    && Number(confluenceScore || 0) >= 60) || isPressureBypass;
 
   if (currentAdx < minAdx && !isConfluenceBypass) {
     reasons.push(`ADX ${currentAdx.toFixed(1)} < ${minAdx}`);
@@ -227,7 +233,7 @@ function evaluatePocketProductionGuard({
 
   if (bars && ['BUY', 'SELL'].includes(direction)) {
     const rejectionCheck = checkRejectionCandle(bars, direction, atr);
-    if (rejectionCheck.hasRejection) {
+    if (rejectionCheck.hasRejection && !isPressureBypass) {
       reasons.push(`rejection candle: ${rejectionCheck.reason}`);
     }
   }
@@ -1221,13 +1227,23 @@ export async function executeForexScanCycle() {
     if (!bars || bars.length < 35) continue;
 
     const lastBar = bars[bars.length - 1];
-    const currPrice = Number(lastBar.close);
+    // Predict Market Pressure & Indecision (Microstructure Model)
+    let marketPressure = null;
+    try {
+      marketPressure = await predictForexMarketPressure(bars, symbol);
+    } catch (err) {
+      console.warn(`[MarketPressure] Inference error for ${symbol}:`, err.message);
+    }
 
-    // Run 1st-Stage Indicator Filter first to obtain indicators series
-    const filterResult = evaluateForexFirstStageFilter(bars, dxyBars, symbol);
+    // Run 1st-Stage Indicator Filter first to obtain indicators series (with marketPressure)
+    const filterResult = evaluateForexFirstStageFilter(bars, dxyBars, symbol, { marketPressure });
     let { qualified, bias, reasons, indicators, activeTrack, confluenceScore } = filterResult;
     const filterQualified = Boolean(qualified);
     const atr = indicators?.atr14 || (currPrice * 0.005);
+
+    if (marketPressure) {
+      console.log(`🧭 [MARKET PRESSURE] ${symbol.replace('=X', '')}: ${marketPressure.state} | Buy: ${(marketPressure.probabilities.buy_pressure*100).toFixed(0)}% | Sell: ${(marketPressure.probabilities.sell_pressure*100).toFixed(0)}% | Indecision: ${(marketPressure.probabilities.indecision*100).toFixed(0)}% | ExpPips: ${marketPressure.pip_projections?.expected_net_pips > 0 ? '+' : ''}${marketPressure.pip_projections?.expected_net_pips}p`);
+    }
 
     // Save recent bars with calculated RSI and ATR to market_bars for chart & raw data display
     try {
@@ -1422,13 +1438,33 @@ export async function executeForexScanCycle() {
       // do NOT block the early-stage breakout by ADX!
       const isConfluenceBypass = (activeTrack === 'SQUEEZE_BREAKOUT' || activeTrack === 'PULLBACK_DIP') && (confluenceScore >= 60);
 
-      // Relax CSM requirement for high confidence AI predictions (edge >= 70%) or Confluence Bypass
-      const minCsm = (confidence >= 0.70 || isConfluenceBypass) ? 0.0 : configuredMinCsm;
+      // Market Pressure Bypass & Counter-Pressure Veto Shield
+      const pBuy = Number(marketPressure?.probabilities?.buy_pressure || 0);
+      const pSell = Number(marketPressure?.probabilities?.sell_pressure || 0);
+      const isPressureBypass = (bias === 'BUY' && (pBuy >= 0.40 || marketPressure?.state === 'BUY_PRESSURE'))
+        || (bias === 'SELL' && (pSell >= 0.40 || marketPressure?.state === 'SELL_PRESSURE'));
+      const isCounterPressure = (bias === 'BUY' && pSell >= 0.40)
+        || (bias === 'SELL' && pBuy >= 0.40);
 
-      if (currentAdx < minAdx && !isConfluenceBypass) {
+      if (isCounterPressure && isSignal) {
+        isSignal = false;
+        const oppProb = bias === 'BUY' ? pSell : pBuy;
+        reasons.push(`🚫 Counter-Pressure Veto: Market Pressure detected opposite push (${(oppProb * 100).toFixed(0)}%)`);
+        console.log(`🛡️ [COUNTER-PRESSURE VETO] ${symbol.replace('=X', '')}: Opposite push ${(oppProb * 100).toFixed(0)}% -> Veto trade`);
+      }
+
+      if (isPressureBypass && !isConfluenceBypass && gatingPassed) {
+        reasons.push(`⚡ Pressure Bypass: Market Pressure confirms directional momentum (${bias === 'BUY' ? (pBuy * 100).toFixed(0) : (pSell * 100).toFixed(0)}%) -> Bypassing ADX/CSM lag`);
+        console.log(`⚡ [PRESSURE BYPASS] ${symbol.replace('=X', '')}: Momentum confirms ${bias} (${bias === 'BUY' ? (pBuy * 100).toFixed(0) : (pSell * 100).toFixed(0)}%) -> Bypassing ADX/CSM lag`);
+      }
+
+      // Relax CSM requirement for high confidence AI predictions (edge >= 70%) or Confluence/Pressure Bypass
+      const minCsm = (confidence >= 0.70 || isConfluenceBypass || isPressureBypass) ? 0.0 : configuredMinCsm;
+
+      if (currentAdx < minAdx && !isConfluenceBypass && !isPressureBypass) {
         gatingPassed = false;
         gatingReason = `ADX ${currentAdx.toFixed(1)} < ${minAdx} (ตลาด Sideway ไร้เทรนด์)`;
-      } else if (absCsm < minCsm && !isConfluenceBypass) {
+      } else if (absCsm < minCsm && !isConfluenceBypass && !isPressureBypass) {
         gatingPassed = false;
         gatingReason = `|CSM Spread| ${absCsm.toFixed(1)} < ${minCsm} (ความแข็งแกร่งคู่เงินไม่ต่างกัน)`;
       }
@@ -1445,7 +1481,7 @@ export async function executeForexScanCycle() {
       || (!DATA_HARVEST_LIVE_MODE && process.env.FOREX_REJECTION_FILTER_ENABLED !== 'false');
     if (rejectionFilterEnabled && qualified && isSignal) {
       const rejectionCheck = checkRejectionCandle(bars, bias, atr);
-      if (rejectionCheck.hasRejection) {
+      if (rejectionCheck.hasRejection && !isPressureBypass) {
         isSignal = false;
         reasons.push(`🚫 Rejection Veto: ${rejectionCheck.reason}`);
         console.log(`🛡️ [REJECTION VETO (LIVE)] ${symbol.replace('=X', '')}: ${rejectionCheck.reason}`);
@@ -1462,7 +1498,9 @@ export async function executeForexScanCycle() {
       indicators,
       csmSpread,
       atr,
-      isJpy
+      isJpy,
+      isPressureBypass,
+      isCounterPressure
     });
     if (LIVE_PRODUCTION_GUARD && isSignal && !pocketProductionGuard.passed) {
       isSignal = false;
@@ -1552,8 +1590,9 @@ export async function executeForexScanCycle() {
         options: {
           lookbackBars: Number(process.env.FOREX_EXIT_LOOKBACK_BARS || 24),
           pivotStrength: Number(process.env.FOREX_EXIT_PIVOT_STRENGTH || 2),
-          tpAtrMult: Number(process.env.FOREX_DYNAMIC_TP_ATR_MULT || (isScalpMode ? 0.6 : 0.9)),
-          slAtrMult: Number(process.env.FOREX_DYNAMIC_SL_ATR_MULT || 0.8),
+          tpAtrMult: Number(process.env.FOREX_DYNAMIC_TP_ATR_MULT || (marketPressure?.pip_projections?.recommended_tp_atr_mult || (isScalpMode ? 0.6 : 0.9))),
+          slAtrMult: Number(process.env.FOREX_DYNAMIC_SL_ATR_MULT || (marketPressure?.pip_projections?.recommended_sl_atr_mult || 0.8)),
+          marketPressure,
           bufferAtrFraction: Number(process.env.FOREX_DYNAMIC_BUFFER_ATR_FRACTION || 0.1),
           minBufferPips: Number(process.env.FOREX_DYNAMIC_MIN_BUFFER_PIPS || (isScalpMode ? 0.5 : 1)),
           minTpPips,
@@ -1734,8 +1773,8 @@ export async function executeForexScanCycle() {
     const shadowEntryScore = shadowUsesRawDirectionalScore
       ? shadowDirectionalScore
       : shadowConfidence;
-    const shadowThresholdMult = Number(process.env.FOREX_SHADOW_THRESHOLD_MULT || 0.85);
-    const shadowMinConfluence = Number(process.env.FOREX_SHADOW_MIN_CONFLUENCE || 40);
+    const shadowThresholdMult = Number(process.env.FOREX_SHADOW_THRESHOLD_MULT || 0.65);
+    const shadowMinConfluence = Number(process.env.FOREX_SHADOW_MIN_CONFLUENCE || 35);
     const shadowEntryThreshold = shadowUsesRawDirectionalScore
       ? Number((getRawDirectionalThreshold(bias) * shadowThresholdMult).toFixed(4))
       : Number((signalConfidenceThreshold * shadowThresholdMult).toFixed(4));
@@ -1794,7 +1833,8 @@ export async function executeForexScanCycle() {
               threshold: shadowEntryThreshold,
               score_used: shadowEntryScore,
               score_type: shadowUsesRawDirectionalScore ? 'raw_directional_probability' : 'relative_confidence',
-              confluenceScore
+              confluenceScore,
+              market_pressure: marketPressure
             }
           });
           console.log(`🧪 [${SHADOW_MODEL_ROLE.toUpperCase()} SHADOW] ${cleanName} ${bias} @ ${entryPrice.toFixed(dec)} | ${(shadowConfidence * 100).toFixed(1)}% | ${SHADOW_MODEL_VERSION}`);
@@ -2403,6 +2443,7 @@ export async function executeForexScanCycle() {
             score_used: primaryEntryScore,
             score_type: primaryUsesRawDirectionalScore ? 'raw_directional_probability' : 'relative_confidence',
             confluenceScore,
+            market_pressure: marketPressure,
             entry_policy: isSignalReentry
               ? 'forex_signal_reentry_v1'
               : (isScaleIn ? 'forex_scalein_v1' : 'forex_base_v1'),

@@ -1,0 +1,35 @@
+{
+  "model_id": "forex_market_pressure_v1.0.0",
+  "created_at": "2026-09-24T16:15:00+07:00",
+  "algorithm": "RandomForestClassifier(n_estimators=100, max_depth=7, class_weight='balanced')",
+  "feature_cols": [
+    "bop",
+    "body_ratio",
+    "upper_wick",
+    "lower_wick",
+    "wick_asym",
+    "rel_range",
+    "ker_3",
+    "ker_5",
+    "ker_10",
+    "dir_disp_3",
+    "dir_disp_5",
+    "vol_skew"
+  ],
+  "classes": {
+    "0": "INDECISION_CHOP",
+    "1": "BUY_PRESSURE",
+    "2": "SELL_PRESSURE"
+  },
+  "performance": {
+    "buy_safe_rate": 0.8307,
+    "sell_safe_rate": 0.8366
+  },
+  "top_features": [
+    "vol_skew",
+    "bop",
+    "dir_disp_3",
+    "dir_disp_5",
+    "rel_range"
+  ]
+}
