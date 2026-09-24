@@ -1,0 +1,27 @@
+{
+  "active_version": "Challenger-Exit-v1.1.0",
+  "artifact": "forex_exit_challenger_v1.1.0.joblib",
+  "accuracy": 0.673,
+  "features": [
+    "is_buy",
+    "bar_index",
+    "floating_pips",
+    "cum_mfe_pips",
+    "cum_mae_pips",
+    "giveback_pips",
+    "candle_body_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "adverse_pressure",
+    "rsi",
+    "atr_pips"
+  ],
+  "classes": {
+    "0": "HOLD",
+    "1": "EARLY_CUT",
+    "2": "STALL_HARVEST"
+  },
+  "trained_samples": 4218,
+  "test_samples": 1055,
+  "updated_at": "2026-09-24T14:28:17.684351"
+}

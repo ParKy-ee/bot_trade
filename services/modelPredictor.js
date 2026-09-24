@@ -14,6 +14,7 @@ const PYTHON_PATH = process.env.PYTHON_PATH || 'python';
 const FOREX_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_bridge.py');
 const FOREX_CHALLENGER_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_challenger_bridge.py');
 const FOREX_RANGE_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_range_bridge.py');
+const FOREX_EXIT_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_exit_bridge.py');
 const CRYPTO_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_crypto_bridge.py');
 const GOLD_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_gold_bridge.py');
 
@@ -62,6 +63,11 @@ export async function predictForexChallengerConfidence(featuresObj) {
 /** Predicts a range mean-reversion setup using the independent range expert. */
 export async function predictForexRangeConfidence(featuresObj) {
   return runPythonModelPredict(featuresObj, FOREX_RANGE_BRIDGE_PATH, 'Forex Range');
+}
+
+/** Predicts dynamic exit action (HOLD, EARLY_CUT, STALL_HARVEST) using the Exit Challenger model. */
+export async function predictForexExitChallenger(featuresObj) {
+  return runPythonModelPredict(featuresObj, FOREX_EXIT_BRIDGE_PATH, 'Forex Exit Challenger');
 }
 
 /**

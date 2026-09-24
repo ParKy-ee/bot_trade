@@ -4,7 +4,7 @@ import { evaluateForexFirstStageFilter } from './forexFilter.js';
 import { sendTelegramAlert } from './telegramAlert.js';
 import { placeOrder, placePendingOrder, getPendingOrders, cancelPendingOrder, modifyStopLoss, closePosition, getRates, getOpenPositions } from './mt5Broker.js';
 import { recordTradeEntry, recordTradeExit, syncMt5PositionsWithDatabase } from './tradeResultTracker.js';
-import { predictForexConfidence, predictForexChallengerConfidence, predictForexRangeConfidence } from './modelPredictor.js';
+import { predictForexConfidence, predictForexChallengerConfidence, predictForexRangeConfidence, predictForexExitChallenger } from './modelPredictor.js';
 import { reviewTradeWithGemini } from './geminiReviewer.js';
 import { calculateDynamicForexExit, validateForexExitGeometry } from './forexExitEngine.js';
 import { calculateCurrencyStrength, getPairCsmSpread } from './currencyStrength.js';
@@ -324,13 +324,100 @@ async function evaluatePocketShadowTrades({ pool, rawData } = {}) {
       const bars = rawData?.[trade.symbol];
       if (!bars || bars.length === 0) continue;
       const holdMin = Math.max(1, Math.round((new Date() - new Date(trade.entry_time)) / (1000 * 60)));
-      if (holdMin < POCKET_EVAL_EXPIRY_MINUTES) continue;
-
       const currClose = Number(bars[bars.length - 1]?.close);
+      const currHigh = Number(bars[bars.length - 1]?.high);
+      const currLow = Number(bars[bars.length - 1]?.low);
+      const currOpen = Number(bars[bars.length - 1]?.open);
       const entryPrice = Number(trade.entry_price);
       if (!Number.isFinite(currClose) || !Number.isFinite(entryPrice)) continue;
 
       const action = String(trade.action || '').toUpperCase();
+      const isJpy = String(trade.symbol || '').includes('JPY');
+      const pipMult = isJpy ? 100.0 : 10000.0;
+      const floatingPips = action === 'BUY'
+        ? (currClose - entryPrice) * pipMult
+        : (entryPrice - currClose) * pipMult;
+
+      // 1. Intra-Trade Exit Challenger Evaluation (Active after at least 2 bars / 10 mins)
+      if (holdMin >= 10 && bars.length >= 2) {
+        try {
+          const entryTimeMs = new Date(trade.entry_time).getTime();
+          const barsSinceEntry = bars.filter(b => new Date(b.time).getTime() >= entryTimeMs);
+          
+          let maxMfe = -Infinity;
+          let minMae = Infinity;
+          for (const b of barsSinceEntry) {
+            const h = Number(b.high);
+            const l = Number(b.low);
+            const mfe = action === 'BUY' ? (h - entryPrice) * pipMult : (entryPrice - l) * pipMult;
+            const mae = action === 'BUY' ? (l - entryPrice) * pipMult : (entryPrice - h) * pipMult;
+            if (mfe > maxMfe) maxMfe = mfe;
+            if (mae < minMae) minMae = mae;
+          }
+          const cumMfePips = Math.max(0, maxMfe === -Infinity ? floatingPips : maxMfe);
+          const cumMaePips = Math.min(0, minMae === Infinity ? floatingPips : minMae);
+          const givebackPips = Math.max(0, cumMfePips - floatingPips);
+
+          const latestBar = bars[bars.length - 1];
+          const candleRange = (currHigh - currLow) + 0.00001;
+          const candleBodyRatio = (currClose - currOpen) / candleRange;
+          const upperWickRatio = (currHigh - Math.max(currClose, currOpen)) / candleRange;
+          const lowerWickRatio = (Math.min(currClose, currOpen) - currLow) / candleRange;
+          const adversePressure = action === 'BUY' ? -candleBodyRatio : candleBodyRatio;
+          const rsi = Number(latestBar.rsi || 50.0);
+          const atrPips = Number(latestBar.atr || 0.001) * pipMult;
+
+          const exitEval = await predictForexExitChallenger({
+            is_buy: action === 'BUY' ? 1 : 0,
+            bar_index: Math.max(1, Math.round(holdMin / 5)),
+            floating_pips: floatingPips,
+            cum_mfe_pips: cumMfePips,
+            cum_mae_pips: cumMaePips,
+            giveback_pips: givebackPips,
+            candle_body_ratio: candleBodyRatio,
+            upper_wick_ratio: upperWickRatio,
+            lower_wick_ratio: lowerWickRatio,
+            adverse_pressure: adversePressure,
+            rsi,
+            atr_pips: atrPips
+          });
+
+          // Check STALL_HARVEST (Lock in profit before reversal)
+          if (exitEval?.action === 'STALL_HARVEST' && exitEval?.probabilities?.stall_harvest >= 0.60 && floatingPips >= 2.0) {
+            const exitReason = 'EXIT_CHALLENGER_STALL_HARVEST';
+            await recordTradeExit({
+              ticket: null,
+              symbol: trade.symbol,
+              exitPrice: currClose,
+              exitReason,
+              tradeResultId: trade.id
+            });
+            console.log(`🎯 [CHALLENGER_EXIT_V1.1.0] ${trade.symbol} ${action} STALL_HARVEST triggered @ ${currClose} (Locked +${floatingPips.toFixed(1)} pips | Prob: ${(exitEval.probabilities.stall_harvest * 100).toFixed(1)}%)`);
+            continue;
+          }
+
+          // Check EARLY_CUT (Cut loss before full Hard SL)
+          if (exitEval?.action === 'EARLY_CUT' && exitEval?.probabilities?.early_cut >= 0.55 && floatingPips <= -2.0) {
+            const exitReason = 'EXIT_CHALLENGER_EARLY_CUT';
+            await recordTradeExit({
+              ticket: null,
+              symbol: trade.symbol,
+              exitPrice: currClose,
+              exitReason,
+              tradeResultId: trade.id
+            });
+            console.log(`✂️ [CHALLENGER_EXIT_V1.1.0] ${trade.symbol} ${action} EARLY_CUT triggered @ ${currClose} (Saved from Hard SL! Floating: ${floatingPips.toFixed(1)} pips | Prob: ${(exitEval.probabilities.early_cut * 100).toFixed(1)}%)`);
+            continue;
+          }
+        } catch (exitErr) {
+          // Keep normal execution if inference has transient error
+          console.warn(`⚠️ [CHALLENGER_EXIT] Error evaluating intra-trade exit for ${trade.symbol}:`, exitErr.message);
+        }
+      }
+
+      // 2. Standard Fixed-Time Expiry Fallback
+      if (holdMin < POCKET_EVAL_EXPIRY_MINUTES) continue;
+
       const isWin = action === 'BUY' ? currClose > entryPrice : currClose < entryPrice;
       const isTie = currClose === entryPrice;
       const exitReason = isTie
