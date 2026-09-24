@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-09-08T14:53:30.627817",
+  "data": {
+    "path": "C:\\xampp\\htdocs\\trade_bot\\data\\dataset_forex_m5.csv",
+    "rows": 45000,
+    "symbols": 9,
+    "confidence_threshold": 0.65,
+    "validation_start": "2026-09-01T06:15:00",
+    "test_start": "2026-09-03T20:55:00",
+    "data_end": "2026-09-08T11:35:00"
+  },
+  "formula": {
+    "tp": "max(min_tp, tp_atr_mult * ATR14_pips, tp_swing_fraction * prior_swing_range_pips)",
+    "sl": "max(min_sl, sl_atr_mult * ATR14_pips, sl_swing_fraction * prior_swing_range_pips)"
+  },
+  "parameters": {
+    "lookback_hours": 5,
+    "lookback_bars": 60,
+    "tp_atr_mult": 1.5,
+    "tp_swing_fraction": 0.55,
+    "sl_atr_mult": 0.8,
+    "sl_swing_fraction": 0.15,
+    "min_tp_major": 22,
+    "min_sl_major": 8,
+    "min_tp_jpy": 34,
+    "min_sl_jpy": 24
+  },
+  "validation_metrics": {
+    "win_rate": 56.09756097560976,
+    "net_pips": 879.5600000000036,
+    "expectancy_pips": 21.452682926829354,
+    "profit_factor": 4.47837779052065,
+    "max_drawdown_pips": 56.000000000000966,
+    "score": 851.5600000000031,
+    "avg_tp_pips": 56.80658536585386,
+    "avg_sl_pips": 19.60731707317075
+  },
+  "test_metrics": {
+    "win_rate": 38.59649122807017,
+    "net_pips": 182.49999999999704,
+    "expectancy_pips": 3.2017543859648603,
+    "profit_factor": 1.30771565387468,
+    "max_drawdown_pips": 162.72500000000605,
+    "score": 101.13749999999402,
+    "avg_tp_pips": 51.89517543859643,
+    "avg_sl_pips": 20.33456140350876
+  },
+  "status": "RECOMMENDATION_READY",
+  "note": "Selected after positive validation and positive out-of-sample net pips with enough trades; this is a research recommendation, not a guarantee."
+}

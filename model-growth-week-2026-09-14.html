@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Model Growth Report | 14–18 ก.ย. 2026</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-muted: #f8fafc;
+      --text: #172033;
+      --muted: #667085;
+      --border: #dfe5ee;
+      --blue: #2563eb;
+      --green: #15803d;
+      --orange: #c2410c;
+      --purple: #7c3aed;
+      --red: #b42318;
+      --grid: #e8edf4;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      line-height: 1.5;
+    }
+    .page { max-width: 1360px; margin: 0 auto; padding: 28px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(24px, 3vw, 34px); line-height: 1.2; letter-spacing: -0.02em; }
+    h2 { margin-bottom: 8px; font-size: 21px; }
+    h3 { font-size: 15px; }
+    .subtitle { margin-top: 8px; color: var(--muted); }
+    .caption { margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .section { margin-top: 24px; }
+
+    .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 22px; }
+    .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .stat-value { font-size: 25px; font-weight: 700; line-height: 1.1; }
+    .stat-label { margin-top: 6px; color: var(--muted); font-size: 12px; }
+    .accent-blue { color: var(--blue); }
+    .accent-green { color: var(--green); }
+
+    .callout { margin-top: 18px; border: 1px solid #bfdbfe; border-left: 4px solid var(--blue); background: #eff6ff; border-radius: 8px; padding: 13px 15px; }
+    .callout.warning { border-color: #fed7aa; border-left-color: var(--orange); background: #fff7ed; }
+    .callout.success { border-color: #bbf7d0; border-left-color: var(--green); background: #f0fdf4; }
+    .callout-title { font-weight: 700; margin-bottom: 4px; }
+    .callout p { font-size: 13px; }
+
+    .timeline { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .timeline-row { display: grid; grid-template-columns: 130px 240px 1fr; gap: 16px; padding: 13px 16px; border-bottom: 1px solid var(--border); align-items: start; }
+    .timeline-row:last-child { border-bottom: 0; }
+    .timeline-date { font-weight: 700; font-size: 13px; }
+    .timeline-model { font-weight: 600; font-size: 13px; }
+    .timeline-detail { color: var(--muted); font-size: 13px; }
+    .version { display: inline-block; margin-left: 6px; padding: 2px 7px; border: 1px solid #bfdbfe; border-radius: 999px; color: #1d4ed8; background: #eff6ff; font-size: 11px; font-weight: 600; }
+
+    .model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .model-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .model-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 13px 16px; border-bottom: 1px solid var(--border); }
+    .model-header h3 { font-size: 14px; }
+    .model-active { flex-shrink: 0; padding: 3px 8px; border-radius: 999px; background: #f0fdf4; color: var(--green); font-size: 11px; font-weight: 600; }
+    .model-active.baseline { background: #fff7ed; color: var(--orange); }
+    .model-body { padding: 15px; }
+    .model-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-height: 38px; }
+    .market { padding: 3px 8px; border-radius: 999px; background: #f5f3ff; color: var(--purple); font-size: 11px; font-weight: 700; }
+    .model-description { color: var(--muted); font-size: 12px; }
+    .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 15px; }
+    .chart-title { font-size: 13px; font-weight: 700; }
+    .axis-label { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .chart-wrap { margin-top: 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-muted); overflow: hidden; }
+    .chart-wrap svg { display: block; width: 100%; height: auto; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 4px; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .x-axis-label { margin-top: 2px; text-align: center; color: var(--muted); font-size: 11px; }
+    .model-note { margin-top: 14px; padding: 10px 11px; border: 1px solid #fed7aa; border-left: 3px solid var(--orange); border-radius: 7px; background: #fffaf5; font-size: 12px; }
+    .model-note.success { border-color: #bbf7d0; border-left-color: var(--green); background: #f5fff7; }
+    .model-note.info { border-color: #bfdbfe; border-left-color: var(--blue); background: #f5f9ff; }
+    .model-note strong { display: block; margin-bottom: 3px; }
+
+    .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: 12px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+    th { background: var(--surface-muted); color: var(--muted); font-size: 11px; letter-spacing: .02em; position: sticky; top: 0; }
+    td:nth-child(n+4) { text-align: right; }
+    tr:last-child td { border-bottom: 0; }
+    .footer-note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) {
+      .summary-grid { grid-template-columns: repeat(2, 1fr); }
+      .model-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 680px) {
+      .page { padding: 18px 12px; }
+      .summary-grid, .charts { grid-template-columns: 1fr; }
+      .timeline-row { grid-template-columns: 1fr; gap: 3px; }
+      .model-header { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>สรุปการพัฒนา Model ประจำสัปดาห์</h1>
+      <p class="subtitle">ติดตามตั้งแต่วันจันทร์ 14 ก.ย. ถึง version ล่าสุดที่ถูกสร้างใน registry วันศุกร์ 18 ก.ย. 2026</p>
+      <p class="caption">Source: python/models/*_registry.json · ตัวเลขเป็น test metric ใน registry · รายงานวันที่ 20 ก.ย. 2026</p>
+    </header>
+
+    <section class="summary-grid" aria-label="Summary metrics">
+      <div class="stat"><div class="stat-value accent-blue">9</div><div class="stat-label">versions ที่สร้างในช่วงนี้</div></div>
+      <div class="stat"><div class="stat-value">4</div><div class="stat-label">สายโมเดลที่ถูกพัฒนา</div></div>
+      <div class="stat"><div class="stat-value accent-green">+25.4%</div><div class="stat-label">Champion samples: v1.3 → v1.6</div></div>
+      <div class="stat"><div class="stat-value accent-green">+29.6%</div><div class="stat-label">Crypto samples: v1.0 → v1.2</div></div>
+    </section>
+
+    <div class="callout">
+      <div class="callout-title">ภาพรวมสั้น ๆ</div>
+      <p>สัปดาห์นี้มีการเพิ่ม version ต่อเนื่อง 5 วัน: Champion ขยายข้อมูลจาก 45,529 เป็น 57,094 samples, Crypto พัฒนาจาก baseline ไปถึง v1.2.0, ขณะที่ Challenger v1.7.0 มี dataset ใหญ่ที่สุด 80,529 samples. จุดที่ต้องตรวจต่อคือ Champion Sell ROC-AUC ลดลง 13.0 percentage points แม้ข้อมูลเพิ่มขึ้น และ Range ยังมีเพียง baseline เดียว.</p>
+    </div>
+
+    <section class="section">
+      <h2>Release timeline</h2>
+      <div class="timeline">
+        <div class="timeline-row"><div class="timeline-date">จันทร์ 14 ก.ย.</div><div class="timeline-model">Forex Champion <span class="version">v1.3.0</span></div><div class="timeline-detail">45,529 samples · 194 live trades</div></div>
+        <div class="timeline-row"><div class="timeline-date">อังคาร 15 ก.ย.</div><div class="timeline-model">Champion · Range · Crypto <span class="version">3 versions</span></div><div class="timeline-detail">เริ่มสาย Range และ Crypto โดยเฉพาะ</div></div>
+        <div class="timeline-row"><div class="timeline-date">พุธ 16 ก.ย.</div><div class="timeline-model">Crypto <span class="version">v1.1.0</span></div><div class="timeline-detail">11,107 samples · 437 trade results</div></div>
+        <div class="timeline-row"><div class="timeline-date">พฤหัส 17 ก.ย.</div><div class="timeline-model">Champion · Crypto <span class="version">3 versions</span></div><div class="timeline-detail">เพิ่ม observations 814 → 1,824 และ Crypto 11,562 samples</div></div>
+        <div class="timeline-row"><div class="timeline-date">ศุกร์ 18 ก.ย.</div><div class="timeline-model">Forex Challenger <span class="version">v1.7.0</span></div><div class="timeline-detail">80,529 total samples · 1,152 live/shadow trades · 4,082 observations</div></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>กราฟเส้นการเติบโตแยกตาม Model</h2>
+      <p class="subtitle">กราฟซ้ายวัดขนาดข้อมูลที่ใช้ train/eligible ส่วนกราฟขวาวัด ROC-AUC ของ Buy และ Sell; version เรียงตาม created_at.</p>
+      <div id="modelGrid" class="model-grid" style="margin-top: 12px;"></div>
+    </section>
+
+    <section class="section">
+      <h2>รายละเอียดทุก version</h2>
+      <p class="caption" style="margin-bottom: 8px;">ตัวเลข ROC-AUC และ PR-AUC แสดงเป็น Buy / Sell</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>วันที่</th><th>Model</th><th>Version</th><th>Samples / eligible</th><th>ROC-AUC</th><th>PR-AUC</th></tr></thead>
+          <tbody>
+            <tr><td>14 ก.ย.</td><td>Forex Champion</td><td>v1.3.0</td><td>45,529</td><td>78.1% / 80.7%</td><td>16.0% / 32.0%</td></tr>
+            <tr><td>15 ก.ย.</td><td>Forex Champion</td><td>v1.4.0</td><td>45,619</td><td>78.0% / 80.3%</td><td>16.1% / 32.2%</td></tr>
+            <tr><td>15 ก.ย.</td><td>Forex Range</td><td>range-v1.0.0</td><td>8,853</td><td>52.2% / 53.2%</td><td>39.3% / 43.3%</td></tr>
+            <tr><td>15 ก.ย.</td><td>Crypto</td><td>v1.0.0</td><td>8,922</td><td>79.8% / 77.5%</td><td>23.2% / 26.0%</td></tr>
+            <tr><td>16 ก.ย.</td><td>Crypto</td><td>v1.1.0</td><td>11,107</td><td>61.9% / 65.7%</td><td>41.2% / 34.4%</td></tr>
+            <tr><td>17 ก.ย.</td><td>Forex Champion</td><td>v1.5.0</td><td>50,169</td><td>70.3% / 74.4%</td><td>15.8% / 26.8%</td></tr>
+            <tr><td>17 ก.ย.</td><td>Forex Champion</td><td>v1.6.0</td><td>57,094</td><td>72.4% / 67.7%</td><td>19.6% / 16.3%</td></tr>
+            <tr><td>17 ก.ย.</td><td>Crypto</td><td>v1.2.0</td><td>11,562</td><td>75.9% / 91.2%</td><td>63.8% / 78.9%</td></tr>
+            <tr><td>18 ก.ย.</td><td>Forex Challenger</td><td>challenger-v1.7.0</td><td>80,529</td><td>81.2% / 78.4%</td><td>29.6% / 26.7%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="footer-note">PR-AUC ควรดูคู่กับ ROC-AUC เพราะ label ของ trade มีความไม่สมดุล; ตัวเลขทั้งหมดเป็น test metric ไม่ใช่ผลกำไร live โดยตรง.</p>
+    </section>
+
+    <div class="callout warning section">
+      <div class="callout-title">Operational note</div>
+      <p>registry ล่าสุดระบุ Champion v1.6.0 และ Challenger v1.7.0 แต่ค่าใน .env ยังตั้ง FOREX_MODEL_VERSION=v1.3.0 และ FOREX_CHALLENGER_MODEL_VERSION=challenger-v1.1.0 ควรตรวจ runtime config และ process ก่อน deploy จริง.</p>
+    </div>
+  </main>
+
+  <script>
+    const modelData = [
+      {
+        name: "Forex Champion", market: "Forex · Live candidate", active: "active registry: v1.6.0", baseline: false,
+        description: "Tri-Ensemble: LightGBM + XGBoost + CatBoost + Random Forest", sampleLabel: "Total samples",
+        noteClass: "", noteTitle: "อ่านแนวโน้ม",
+        note: "จำนวนข้อมูลโต 25.4% และ live trades โตจาก 194 เป็น 683 (+252.1%). อย่างไรก็ดี ROC-AUC Sell ลดจาก 80.7% เป็น 67.7% จึงควรแยกตรวจผลตาม regime และทำ validation เพิ่มก่อนยึด v1.6.0 เป็น baseline ใหม่.",
+        points: [
+          { version: "v1.3.0", date: "14 ก.ย.", samples: 45529, aucBuy: .7812, aucSell: .8071 },
+          { version: "v1.4.0", date: "15 ก.ย.", samples: 45619, aucBuy: .7800, aucSell: .8030 },
+          { version: "v1.5.0", date: "17 ก.ย.", samples: 50169, aucBuy: .7032, aucSell: .7441 },
+          { version: "v1.6.0", date: "17 ก.ย.", samples: 57094, aucBuy: .7236, aucSell: .6768 }
+        ]
+      },
+      {
+        name: "Crypto", market: "Crypto · M5", active: "active registry: v1.2.0", baseline: false,
+        description: "Tri-Ensemble จาก BTC, ETH และ SOL พร้อม trade results", sampleLabel: "Total samples",
+        noteClass: "success", noteTitle: "คุณภาพดีขึ้นชัดเจน",
+        note: "ข้อมูลโต 29.6% พร้อมคุณภาพฝั่ง Sell ที่ดีขึ้น: ROC-AUC 77.5% → 91.2% และ PR-AUC 26.0% → 78.9% ใน v1.2.0; ควรตรวจ out-of-sample ต่อ.",
+        points: [
+          { version: "v1.0.0", date: "15 ก.ย.", samples: 8922, aucBuy: .7984, aucSell: .7748 },
+          { version: "v1.1.0", date: "16 ก.ย.", samples: 11107, aucBuy: .6193, aucSell: .6570 },
+          { version: "v1.2.0", date: "17 ก.ย.", samples: 11562, aucBuy: .7586, aucSell: .9123 }
+        ]
+      },
+      {
+        name: "Forex Challenger", market: "Forex · Shadow / harvesting", active: "active registry: v1.7.0", baseline: true,
+        description: "Dual GradientBoosting สำหรับ BUY และ SELL", sampleLabel: "Total samples",
+        noteClass: "info", noteTitle: "ยังไม่มีเส้นแนวโน้มหลาย version",
+        note: "ในช่วงเวลานี้ registry มีข้อมูลของ Challenger เพียง v1.7.0 จึงยังวาดเส้นการเติบโตข้าม version ไม่ได้. จุดล่าสุดมี ROC-AUC Buy 81.2% และ Sell 78.4% จาก 80,529 samples, 1,152 live/shadow trades และ 4,082 observations.",
+        points: [{ version: "challenger-v1.7.0", date: "18 ก.ย.", samples: 80529, aucBuy: .8122, aucSell: .7838 }]
+      },
+      {
+        name: "Forex Range", market: "Forex · Mean-reversion", active: "active registry: range-v1.0.0", baseline: true,
+        description: "Dual Random Forest สำหรับตลาด sideway / range", sampleLabel: "Eligible samples",
+        noteClass: "", noteTitle: "ยังไม่มีเส้นแนวโน้มหลาย version",
+        note: "มีเพียง range-v1.0.0 ที่สร้างในสัปดาห์นี้ จึงเป็น baseline ยังไม่มี trend. ROC-AUC อยู่ราว 52–53% และ RANGE_LIVE_ENABLED=false จึงควรเก็บข้อมูล shadow และประเมินเพิ่มก่อนเปิด live.",
+        points: [{ version: "range-v1.0.0", date: "15 ก.ย.", samples: 8853, aucBuy: .5223, aucSell: .5324 }]
+      }
+    ];
+
+    const chartColors = ["#2563eb", "#c2410c", "#15803d", "#7c3aed"];
+    const svgNS = "http://www.w3.org/2000/svg";
+
+    function svgEl(tag, attrs, text) {
+      const el = document.createElementNS(svgNS, tag);
+      Object.entries(attrs || {}).forEach(([key, value]) => el.setAttribute(key, value));
+      if (text !== undefined) el.textContent = text;
+      return el;
+    }
+
+    function renderChart(container, categories, series, yLabel, suffix) {
+      const width = 680, height = 240;
+      const pad = { top: 20, right: 18, bottom: 48, left: 58 };
+      const plotW = width - pad.left - pad.right;
+      const plotH = height - pad.top - pad.bottom;
+      const values = series.flatMap(item => item.data);
+      let min = Math.min(...values), max = Math.max(...values);
+      if (min === max) { min -= max * 0.1 || 1; max += max * 0.1 || 1; }
+      const range = max - min;
+      min -= range * 0.08; max += range * 0.08;
+      const x = i => categories.length === 1 ? pad.left + plotW / 2 : pad.left + (i * plotW / (categories.length - 1));
+      const y = value => pad.top + ((max - value) / (max - min)) * plotH;
+      const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${yLabel} chart` });
+      const ticks = 4;
+      for (let i = 0; i <= ticks; i++) {
+        const val = min + ((max - min) * i / ticks);
+        const yy = y(val);
+        svg.appendChild(svgEl("line", { x1: pad.left, y1: yy, x2: width - pad.right, y2: yy, stroke: "#e8edf4", "stroke-width": 1 }));
+        const label = suffix === "%" ? `${val.toFixed(1)}%` : Math.round(val).toLocaleString("en-US");
+        svg.appendChild(svgEl("text", { x: pad.left - 8, y: yy + 4, "text-anchor": "end", fill: "#667085", "font-size": 11 }, label));
+      }
+      svg.appendChild(svgEl("line", { x1: pad.left, y1: pad.top, x2: pad.left, y2: pad.top + plotH, stroke: "#b9c3d1", "stroke-width": 1 }));
+      svg.appendChild(svgEl("line", { x1: pad.left, y1: pad.top + plotH, x2: width - pad.right, y2: pad.top + plotH, stroke: "#b9c3d1", "stroke-width": 1 }));
+      categories.forEach((label, i) => {
+        const xx = x(i);
+        svg.appendChild(svgEl("text", { x: xx, y: height - 24, "text-anchor": "middle", fill: "#667085", "font-size": 10 }, label));
+      });
+      series.forEach((item, seriesIndex) => {
+        const color = item.color || chartColors[seriesIndex % chartColors.length];
+        const points = item.data.map((value, i) => `${x(i)},${y(value)}`).join(" ");
+        if (item.data.length > 1) svg.appendChild(svgEl("polyline", { points, fill: "none", stroke: color, "stroke-width": 2.5, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+        item.data.forEach((value, i) => {
+          const circle = svgEl("circle", { cx: x(i), cy: y(value), r: 4, fill: color, stroke: "#ffffff", "stroke-width": 1.5 });
+          circle.appendChild(svgEl("title", {}, `${item.name} · ${categories[i]}: ${suffix === "%" ? value.toFixed(1) + "%" : value.toLocaleString("en-US")}`));
+          svg.appendChild(circle);
+        });
+      });
+      const yText = svgEl("text", { x: 14, y: pad.top + plotH / 2, transform: `rotate(-90 14 ${pad.top + plotH / 2})`, "text-anchor": "middle", fill: "#667085", "font-size": 11 }, yLabel);
+      svg.appendChild(yText);
+      container.replaceChildren(svg);
+    }
+
+    function renderModelCard(model, index) {
+      const card = document.createElement("article");
+      card.className = "model-card";
+      card.innerHTML = `
+        <div class="model-header"><h3>${model.name}</h3><span class="model-active ${model.baseline ? "baseline" : ""}">${model.active}</span></div>
+        <div class="model-body">
+          <div class="model-meta"><span class="market">${model.market}</span><span class="model-description">${model.description}</span></div>
+          <div class="charts">
+            <div><div class="chart-title">การเติบโตของข้อมูล</div><div class="axis-label">Y-axis: ${model.sampleLabel}</div><div class="chart-wrap" data-chart="samples-${index}"></div><div class="x-axis-label">X-axis: Model version ตามลำดับเวลา</div><div class="legend"><span class="legend-item"><span class="legend-dot" style="background:${chartColors[0]}"></span>${model.sampleLabel}</span></div></div>
+            <div><div class="chart-title">คุณภาพการจำแนก</div><div class="axis-label">Y-axis: ROC-AUC (%)</div><div class="chart-wrap" data-chart="auc-${index}"></div><div class="x-axis-label">X-axis: Model version ตามลำดับเวลา</div><div class="legend"><span class="legend-item"><span class="legend-dot" style="background:#15803d"></span>Buy ROC-AUC</span><span class="legend-item"><span class="legend-dot" style="background:#c2410c"></span>Sell ROC-AUC</span></div></div>
+          </div>
+          <div class="model-note ${model.noteClass}"><strong>${model.noteTitle}</strong>${model.note}</div>
+          <div class="caption">Source: python/models/*_registry.json · ช่วงข้อมูล: 14–18 ก.ย. 2026</div>
+        </div>`;
+      const categories = model.points.map(point => `${point.version} (${point.date})`);
+      renderChart(card.querySelector(`[data-chart="samples-${index}"]`), categories, [{ name: model.sampleLabel, data: model.points.map(point => point.samples), color: "#2563eb" }], model.sampleLabel, "");
+      renderChart(card.querySelector(`[data-chart="auc-${index}"]`), categories, [
+        { name: "Buy ROC-AUC", data: model.points.map(point => Number((point.aucBuy * 100).toFixed(1))), color: "#15803d" },
+        { name: "Sell ROC-AUC", data: model.points.map(point => Number((point.aucSell * 100).toFixed(1))), color: "#c2410c" }
+      ], "ROC-AUC (%)", "%");
+      return card;
+    }
+
+    const modelGrid = document.getElementById("modelGrid");
+    modelData.forEach((model, index) => modelGrid.appendChild(renderModelCard(model, index)));
+  </script>
+</body>
+</html>

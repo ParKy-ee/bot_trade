@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Swing Trading Bot Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="logo-icon">🤖</div>
+        <div>
+          <h1>AI Swing Trading Bot</h1>
+          <p class="subtitle">Node.js Daemon &bull; XAMPP MySQL &bull; LightGBM + Random Forest</p>
+        </div>
+      </div>
+
+      <div class="header-status">
+        <div id="db-badge" class="badge badge-neutral">● กำลังเชื่อมต่อฐานข้อมูล...</div>
+        <div id="bot-badge" class="badge badge-neutral">● สถานะบอท: ...</div>
+        <div id="market-badge" class="badge badge-neutral">● ตลาด: ...</div>
+        <div id="mt5-badge" class="badge badge-neutral">● MT5 Demo: ตรวจสอบ...</div>
+      </div>
+
+      <div class="header-actions">
+        <button id="btn-scan" class="btn btn-primary">
+          <span class="btn-icon">⚡</span> สแกนตลาดทันที
+        </button>
+        <button id="btn-toggle" class="btn btn-secondary">
+          <span class="btn-icon">⏸️</span> หยุดบอทชั่วคราว
+        </button>
+        <button id="btn-seed" class="btn btn-secondary">
+          <span class="btn-icon">📦</span> Seed ข้อมูลย้อนหลัง
+        </button>
+      </div>
+    </header>
+
+    <!-- Market Switcher Tabs -->
+    <div class="market-switcher">
+      <button id="tab-stocks" class="tab-btn">📈 หุ้นสหรัฐ (US Stocks) <span class="tab-sub" id="stocks-tab-sub">● สแกนทุก 5 นาที</span></button>
+      <button id="tab-forex" class="tab-btn active">💱 ตลาดคู่เงิน (Forex Pairs) <span class="tab-sub" id="forex-tab-sub">🟢 MT5 เชื่อมต่อสด</span></button>
+    </div>
+
+    <!-- MT5 Account Info Banner (Forex Mode) -->
+    <div id="mt5-info-banner" class="card mt5-banner" style="display: none;">
+      <div class="mt5-banner-content">
+        <div class="mt5-icon">💻</div>
+        <div>
+          <strong id="mt5-acc-name">MetaTrader 5 Demo Terminal</strong>
+          <p class="muted" id="mt5-acc-details">เปิดโปรแกรม MT5 (XM หรือ MetaTrader 5) บนเครื่องเพื่อเริ่มส่งคำสั่งอัตโนมัติ</p>
+        </div>
+      </div>
+      <div class="mt5-metrics">
+        <div class="mt5-metric">
+          <span class="muted">Balance:</span>
+          <strong id="mt5-balance">$0.00</strong>
+        </div>
+        <div class="mt5-metric">
+          <span class="muted">Equity:</span>
+          <strong id="mt5-equity" class="text-success">$0.00</strong>
+        </div>
+        <div class="mt5-metric">
+          <span class="muted">Free Margin:</span>
+          <strong id="mt5-margin">$0.00</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stat Cards -->
+    <div class="stats-grid">
+      <div class="card stat-card">
+        <div class="stat-label">Active Positions (กำลังถือ)</div>
+        <div class="stat-val" id="val-positions">-</div>
+        <div class="stat-desc">ตำแหน่งเทรดที่กำลังรัน Trailing SL</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">สัญญาณซื้อสะสม (Signals)</div>
+        <div class="stat-val text-accent" id="val-signals">-</div>
+        <div class="stat-desc">สัญญาณ AI Swing Buy ทั้งหมด</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">สแกนล่าสุด (Last Scan)</div>
+        <div class="stat-val-sm" id="val-last-scan">ยังไม่มีข้อมูล</div>
+        <div class="stat-desc" id="val-next-scan">รอบถัดไป: -</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">เกณฑ์ความมั่นใจ AI</div>
+        <div class="stat-val" id="val-threshold">38.0%</div>
+        <div class="stat-desc">Confidence Threshold ขั้นต่ำ</div>
+      </div>
+    </div>
+
+    <!-- AI Model Trajectory & Trade Results Analytics Panel (Real-Time SSE) -->
+    <section class="card panel" style="border: 1px solid rgba(56, 189, 248, 0.3); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);">
+      <div class="panel-header" style="flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h2>🧠 สถิติและแนวโน้มโมเดล AI สด (Real-Time Live Telemetry)</h2>
+          <span id="sse-badge" class="badge" style="background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); font-size: 11px; padding: 3px 8px; border-radius: 20px;">
+            🟢 SSE: รอเชื่อมต่อ...
+          </span>
+        </div>
+        <div class="chart-controls" style="display: flex; gap: 8px; align-items: center;">
+          <div style="display: flex; background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 2px;">
+            <button id="btn-chart-forex" style="font-size: 11px; padding: 4px 10px; border-radius: 4px; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: bold;">
+              💱 Forex Pips
+            </button>
+            <button id="btn-chart-stock" style="font-size: 11px; padding: 4px 10px; border-radius: 4px; border: none; cursor: pointer; background: transparent; color: #94a3b8; font-weight: 500;">
+              📈 Stock % Return
+            </button>
+          </div>
+          <button id="btn-toggle-view" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px; cursor: pointer;">
+            📊 ดูภาพรายงาน 4 มิติ
+          </button>
+          <button id="btn-retrain-ml" class="btn btn-primary" style="font-size: 12px; padding: 6px 14px; background: #6366f1; border: none; cursor: pointer; border-radius: 6px;">
+            🔄 Retrain ML Model
+          </button>
+          <span id="model-info-badge" style="font-size: 11px; color: #a5b4fc; background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); padding: 3px 8px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px;">
+            🤖 Tri-Ensemble Active
+          </span>
+        </div>
+      </div>
+
+      <!-- Real-Time Metrics Strip -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; padding: 12px 15px; background: rgba(15, 23, 42, 0.5); border-bottom: 1px solid #334155;">
+        <div style="text-align: center;">
+          <div id="sse-label-winrate" style="font-size: 11px; color: #94a3b8;">Win Rate ปัจจุบัน</div>
+          <div id="sse-winrate" style="font-size: 18px; font-weight: bold; color: #38bdf8;">--%</div>
+        </div>
+        <div style="text-align: center;">
+          <div id="sse-label-closed-count" style="font-size: 11px; color: #94a3b8;">ไม้ที่ปิดแล้ว (W/L)</div>
+          <div id="sse-closed-count" style="font-size: 18px; font-weight: bold; color: #f8fafc;">-- / --</div>
+        </div>
+        <div style="text-align: center;">
+          <div id="sse-label-closed-pips" style="font-size: 11px; color: #94a3b8;">Pips สะสม (Closed)</div>
+          <div id="sse-closed-pips" style="font-size: 18px; font-weight: bold; color: #f43f5e;">--</div>
+        </div>
+        <div style="text-align: center;">
+          <div id="sse-label-floating-pips" style="font-size: 11px; color: #94a3b8;">Floating Pips (สด)</div>
+          <div id="sse-floating-pips" style="font-size: 18px; font-weight: bold; color: #4ade80;">--</div>
+        </div>
+        <div style="text-align: center;">
+          <div id="sse-label-floating-pnl" style="font-size: 11px; color: #94a3b8;">Floating P&L (สด)</div>
+          <div id="sse-floating-pnl" style="font-size: 18px; font-weight: bold; color: #fbbf24;">$--</div>
+        </div>
+      </div>
+
+      <!-- Real-Time Interactive Canvas Chart -->
+      <div id="container-live-chart" style="padding: 15px; position: relative;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span id="chart-curve-title" style="font-size: 12px; font-weight: 600; color: #cbd5e1;">📈 เส้นทางผลตอบแทนสะสม Forex (Live Cumulative Pips Curve)</span>
+          <span id="sse-last-tick" style="font-size: 11px; color: #64748b;">อัปเดตสดจาก MT5</span>
+        </div>
+        <div style="width: 100%; height: 260px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b; overflow: hidden; position: relative;">
+          <canvas id="canvas-live-pips" style="width: 100%; height: 100%; display: block;"></canvas>
+        </div>
+      </div>
+
+      <!-- Static Matplotlib View (Hidden by default, toggleable) -->
+      <div id="container-static-chart" style="padding: 15px; text-align: center; display: none;">
+        <img id="img-model-analytics" src="/model_trade_results_analysis.png?t=1" alt="Model Analysis Chart" style="max-width: 100%; border-radius: 8px; border: 1px solid #334155; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+      </div>
+
+      <!-- Live Open Positions Cards -->
+      <div style="padding: 0 15px 15px 15px;">
+        <div style="font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+          <span>⚡ ออเดอร์ที่กำลังรันสดบน MT5</span>
+          <span id="sse-open-count-badge" class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 10px;">0 ไม้</span>
+        </div>
+        <div id="live-positions-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px;">
+          <div style="grid-column: 1 / -1; text-align: center; padding: 15px; color: #64748b; font-size: 12px;">กำลังรอข้อมูลสดจาก MT5...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Active Positions Panel -->
+    <section class="card panel">
+      <div class="panel-header">
+        <h2>📈 ตำแหน่งที่กำลังถือ (Active Positions & Trailing Stop)</h2>
+        <span class="badge" id="badge-positions-count">0 ตำแหน่ง</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>สัญลักษณ์</th>
+              <th>วันที่เข้าซื้อ</th>
+              <th>ราคาเข้า (Entry)</th>
+              <th>ราคาสูงสุดที่แตะ</th>
+              <th>Trailing SL</th>
+              <th>เป้า Take Profit</th>
+              <th>ระยะกำไรถึง TP</th>
+              <th>สถานะ</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-positions">
+            <tr><td colspan="8" class="text-center muted">กำลังโหลดข้อมูล...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Signals Panel -->
+    <section class="card panel">
+      <div class="panel-header">
+        <h2>🎯 สัญญาณเทรดล่าสุด (Trading Signals)</h2>
+        <span class="badge" id="badge-signals-count">0 รายการ</span>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>เวลาที่เกิดสัญญาณ</th>
+              <th>สัญลักษณ์</th>
+              <th>คำสั่ง</th>
+              <th>ราคา ณ ตอนนั้น</th>
+              <th>ความมั่นใจ AI</th>
+              <th>Stop Loss (SL)</th>
+              <th>Take Profit (TP)</th>
+              <th>Risk / Reward</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-signals">
+            <tr><td colspan="8" class="text-center muted">กำลังโหลดข้อมูล...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Chart Panel -->
+    <section class="card panel">
+      <div class="panel-header">
+        <h2>📊 กราฟราคาตลาดและอินดิเคเตอร์ (Market Bars)</h2>
+        <div class="chart-controls">
+          <label for="select-symbol">เลือกหุ้น:</label>
+          <select id="select-symbol">
+            <option value="SPY">SPY (S&P 500 ETF)</option>
+            <option value="NVDA">NVDA (NVIDIA)</option>
+            <option value="AMD">AMD (Advanced Micro Devices)</option>
+            <option value="TSLA">TSLA (Tesla)</option>
+            <option value="MSFT">MSFT (Microsoft)</option>
+            <option value="AVGO">AVGO (Broadcom)</option>
+            <option value="NFLX">NFLX (Netflix)</option>
+            <option value="AMZN">AMZN (Amazon)</option>
+            <option value="META">META (Meta)</option>
+            <option value="GOOGL">GOOGL (Alphabet)</option>
+          </select>
+        </div>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="canvas-chart"></canvas>
+      </div>
+    </section>
+
+    <!-- Raw Database Tables Panel -->
+    <section class="card panel">
+      <div class="panel-header">
+        <h2>🗄️ ตารางฐานข้อมูล MySQL (XAMPP Data Explorer)</h2>
+        <div class="chart-controls">
+          <select id="select-table">
+            <option value="signals">ตาราง: signals</option>
+            <option value="active_positions">ตาราง: active_positions</option>
+            <option value="trade_results">ตาราง: trade_results (ML Features & PnL Log)</option>
+            <option value="forex_ml_observations">ตาราง: forex_ml_observations (New ML Dataset)</option>
+            <option value="market_bars">ตาราง: market_bars</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-container" style="max-height: 380px;">
+        <table>
+          <thead id="thead-raw"></thead>
+          <tbody id="tbody-raw"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast-container"></div>
+  <script src="app.js"></script>
+</body>
+</html>

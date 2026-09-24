@@ -1,0 +1,38 @@
+{
+  "generated_at": "2026-09-08T01:31:45.822Z",
+  "datasets": {
+    "forex_daily": {
+      "samples": 12959,
+      "timeframe": "1D",
+      "csv_file": "data/dataset_forex_daily_5y.csv",
+      "json_file": "data/dataset_forex_daily_5y.json",
+      "mysql_synced_bars": 12959
+    },
+    "stocks_daily": {
+      "samples": 12550,
+      "symbols": [
+        "NVDA",
+        "AMD",
+        "TSLA",
+        "MSFT",
+        "AVGO",
+        "NFLX",
+        "AMZN",
+        "META",
+        "GOOGL",
+        "SPY"
+      ],
+      "timeframe": "1D",
+      "csv_file": "data/dataset_stocks_daily_5y.csv",
+      "json_file": "data/dataset_stocks_daily_5y.json",
+      "mysql_synced_bars": 12550
+    },
+    "forex_m5": {
+      "samples": 45000,
+      "timeframe": "M5",
+      "csv_file": "data/dataset_forex_m5.csv",
+      "json_file": "data/dataset_forex_m5.json",
+      "mysql_synced_bars": 45000
+    }
+  }
+}

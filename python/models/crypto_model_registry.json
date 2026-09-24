@@ -1,0 +1,251 @@
+{
+  "active_version": "v2.0.0",
+  "market": "crypto",
+  "versions": [
+    {
+      "version": "v1.0.0",
+      "created_at": "2026-09-15T08:39:59.350941",
+      "description": "Initial Dedicated Crypto M5 Tri-Ensemble (Binance Data: BTC, ETH, SOL)",
+      "file": "versions/crypto_m5_model_v1.0.0.joblib",
+      "dataset": {
+        "source": "Binance Public REST API (Klines M5)",
+        "symbols": [
+          "BTCUSDT",
+          "ETHUSDT",
+          "SOLUSDT"
+        ],
+        "total_samples": 8922,
+        "train_samples": 7137,
+        "test_samples": 1785,
+        "positive_rate_buy": 0.1002,
+        "positive_rate_sell": 0.1202
+      },
+      "architecture": "Tri-Ensemble (LightGBM 40% + XGBoost 35% + Random Forest 25%)",
+      "weights": {
+        "lightgbm": 0.4,
+        "xgboost": 0.35,
+        "random_forest": 0.25
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "ema_spread_50_200",
+        "macd_hist",
+        "volume_ratio",
+        "bb_width"
+      ],
+      "metrics": {
+        "roc_auc_buy": 0.7984,
+        "roc_auc_sell": 0.7748,
+        "pr_auc_buy": 0.2315,
+        "pr_auc_sell": 0.2601,
+        "accuracy_buy": 0.9036,
+        "accuracy_sell": 0.8616,
+        "precision_buy": 1.0,
+        "precision_sell": 0.0,
+        "recall_buy": 0.0058,
+        "recall_sell": 0.0,
+        "specificity_buy": 1.0,
+        "specificity_sell": 1.0,
+        "f1_buy": 0.0115,
+        "f1_sell": 0.0,
+        "f2_buy": 0.0072,
+        "f2_sell": 0.0,
+        "mcc_buy": 0.0723,
+        "mcc_sell": 0.0,
+        "log_loss_buy": 0.2486,
+        "log_loss_sell": 0.3122,
+        "brier_buy": 0.079,
+        "brier_sell": 0.1044
+      }
+    },
+    {
+      "version": "v1.1.0",
+      "created_at": "2026-09-16T09:18:10.485217",
+      "description": "Crypto M5 Tri-Ensemble retrained with closed trade_results",
+      "file": "versions/crypto_m5_model_v1.1.0.joblib",
+      "dataset": {
+        "source": "dataset_crypto_m5.csv + trade_results",
+        "historical_samples": 8922,
+        "live_trade_samples": 437,
+        "base_samples": 8922,
+        "trade_result_samples": 437,
+        "train_samples": 8885,
+        "test_samples": 2222,
+        "total_samples": 11107,
+        "positive_rate_buy": 0.1489,
+        "positive_rate_sell": 0.1469
+      },
+      "architecture": "Tri-Ensemble (LightGBM 40% + XGBoost 35% + Random Forest 25%)",
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "ema_spread_50_200",
+        "macd_hist",
+        "volume_ratio",
+        "bb_width"
+      ],
+      "metrics": {
+        "roc_auc_buy": 0.6193,
+        "pr_auc_buy": 0.4124,
+        "roc_auc_sell": 0.657,
+        "pr_auc_sell": 0.3443
+      }
+    },
+    {
+      "version": "v1.2.0",
+      "created_at": "2026-09-17T09:47:06.405999",
+      "description": "Crypto M5 Tri-Ensemble retrained with closed trade_results",
+      "file": "versions/crypto_m5_model_v1.2.0.joblib",
+      "dataset": {
+        "source": "dataset_crypto_m5.csv + trade_results",
+        "historical_samples": 8922,
+        "live_trade_samples": 528,
+        "base_samples": 8922,
+        "trade_result_samples": 528,
+        "ambiguous_rows_excluded": 2,
+        "recovered_trade_samples": 516,
+        "label_policy": "exclude CLOSED_SL with positive P/L and CLOSED_TP with negative P/L",
+        "train_samples": 9249,
+        "test_samples": 2313,
+        "total_samples": 11562,
+        "positive_rate_buy": 0.1431,
+        "positive_rate_sell": 0.1433
+      },
+      "architecture": "Tri-Ensemble (LightGBM 40% + XGBoost 35% + Random Forest 25%)",
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "ema_spread_50_200",
+        "macd_hist",
+        "volume_ratio",
+        "bb_width"
+      ],
+      "metrics": {
+        "roc_auc_buy": 0.7586,
+        "pr_auc_buy": 0.6382,
+        "roc_auc_sell": 0.9123,
+        "pr_auc_sell": 0.789
+      }
+    },
+    {
+      "version": "v1.3.0",
+      "created_at": "2026-09-21T20:42:53.195093",
+      "description": "Crypto M5 Tri-Ensemble retrained with closed trade_results",
+      "file": "versions/crypto_m5_model_v1.3.0.joblib",
+      "dataset": {
+        "source": "dataset_crypto_m5.csv + trade_results",
+        "historical_samples": 8922,
+        "live_trade_samples": 720,
+        "base_samples": 8922,
+        "trade_result_samples": 720,
+        "ambiguous_rows_excluded": 71,
+        "recovered_trade_samples": 522,
+        "label_policy": "exclude CLOSED_SL with positive P/L and CLOSED_TP with negative P/L",
+        "train_samples": 10017,
+        "test_samples": 2505,
+        "total_samples": 12522,
+        "positive_rate_buy": 0.1664,
+        "positive_rate_sell": 0.1331
+      },
+      "architecture": "Tri-Ensemble (LightGBM 40% + XGBoost 35% + Random Forest 25%)",
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "ema_spread_50_200",
+        "macd_hist",
+        "volume_ratio",
+        "bb_width"
+      ],
+      "metrics": {
+        "roc_auc_buy": 0.9393,
+        "pr_auc_buy": 0.8796,
+        "roc_auc_sell": 0.9545,
+        "pr_auc_sell": 0.856
+      }
+    },
+    {
+      "version": "v2.0.0",
+      "created_at": "2026-09-22T19:53:55.290812",
+      "description": "Upgraded Crypto M5 Calibrated Tri-Ensemble with 16 Microstructure & BTC Cross-Correlation Features",
+      "file": "versions/crypto_m5_model_v2.0.0.joblib",
+      "dataset": {
+        "source": "Binance Public REST API (Klines M5 - BTC, ETH, SOL)",
+        "symbols": [
+          "BTCUSDT",
+          "ETHUSDT",
+          "SOLUSDT"
+        ],
+        "total_samples": 8922,
+        "train_samples": 7137,
+        "test_samples": 1785,
+        "positive_rate_buy": 0.1049,
+        "positive_rate_sell": 0.1083
+      },
+      "architecture": "Calibrated Tri-Ensemble (LightGBM 40% + XGBoost 35% + Random Forest 25% with Sigmoid Calibration)",
+      "weights": {
+        "lightgbm": 0.4,
+        "xgboost": 0.35,
+        "random_forest": 0.25
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "ema_spread_50_200",
+        "macd_hist",
+        "volume_ratio",
+        "bb_width",
+        "btc_ret_5",
+        "btc_corr_divergence",
+        "is_weekend",
+        "vwap_distance_pct",
+        "distance_to_swing_high_low",
+        "funding_window_proximity"
+      ],
+      "metrics": {
+        "roc_auc_buy": 0.7714,
+        "roc_auc_sell": 0.8149,
+        "pr_auc_buy": 0.2283,
+        "pr_auc_sell": 0.2179,
+        "accuracy_buy": 0.8812,
+        "accuracy_sell": 0.916,
+        "precision_buy": 0.25,
+        "precision_sell": 0.0,
+        "recall_buy": 0.0146,
+        "recall_sell": 0.0,
+        "specificity_buy": 0.9943,
+        "specificity_sell": 1.0,
+        "f1_buy": 0.0275,
+        "f1_sell": 0.0,
+        "f2_buy": 0.0179,
+        "f2_sell": 0.0,
+        "mcc_buy": 0.0347,
+        "mcc_sell": 0.0,
+        "log_loss_buy": 0.313,
+        "log_loss_sell": 0.2405,
+        "brier_buy": 0.0961,
+        "brier_sell": 0.0708
+      }
+    }
+  ]
+}

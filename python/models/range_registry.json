@@ -1,0 +1,65 @@
+{
+  "active_version": "range-v1.0.0",
+  "model_source": "forex_range",
+  "created_at": "2026-09-15T08:39:44.946138",
+  "artifact": "forex_range_model.joblib",
+  "archive_artifact": "versions/forex_range_model_range-v1.0.0.joblib",
+  "architecture": "Dual Random Forest Range Mean-Reversion Expert",
+  "features": [
+    "rsi_14",
+    "adx_14",
+    "atr_pct",
+    "ema_spread_20_50",
+    "macd_hist",
+    "range_position",
+    "distance_to_mid_atr",
+    "bb_width",
+    "bb_width_ratio",
+    "efficiency_ratio",
+    "upper_wick_pct",
+    "lower_wick_pct",
+    "is_jpy"
+  ],
+  "regime": {
+    "max_adx": 24.0,
+    "max_ema_atr": 0.5,
+    "max_bb_width_ratio": 1.2,
+    "max_efficiency": 0.5,
+    "lookahead_bars": 6,
+    "tp_atr": 0.8,
+    "sl_atr": 0.6
+  },
+  "dataset": {
+    "eligible_samples": 11071,
+    "train_samples": 8853,
+    "test_samples": 2218,
+    "positive_rate_buy": 0.3729,
+    "positive_rate_sell": 0.3981
+  },
+  "metrics": {
+    "buy": {
+      "threshold": 0.58,
+      "accuracy": 0.624,
+      "precision": 0.4286,
+      "recall": 0.0254,
+      "f1": 0.0479,
+      "f05": 0.1026,
+      "roc_auc": 0.5223,
+      "pr_auc": 0.3926,
+      "brier": 0.2478,
+      "mcc": 0.0173
+    },
+    "sell": {
+      "threshold": 0.58,
+      "accuracy": 0.6032,
+      "precision": 0.5429,
+      "recall": 0.0215,
+      "f1": 0.0414,
+      "f05": 0.0929,
+      "roc_auc": 0.5324,
+      "pr_auc": 0.4326,
+      "brier": 0.2482,
+      "mcc": 0.0374
+    }
+  }
+}

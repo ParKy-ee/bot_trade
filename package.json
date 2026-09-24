@@ -1,0 +1,39 @@
+{
+  "name": "trade_bot",
+  "version": "1.0.0",
+  "description": "AI Swing Trading Bot Service (Node.js + XAMPP MySQL)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "seed": "node scripts/seed.js",
+    "fetch-5y": "node scripts/fetch_5y_history.js",
+    "fetch:data": "node scripts/fetch_training_data.js --all",
+    "fetch:stocks": "node scripts/fetch_training_data.js --stocks",
+    "fetch:forex": "node scripts/fetch_training_data.js --forex",
+    "test:model": "python scripts/evaluate_model.py",
+    "model:list": "python scripts/model_registry.py --list",
+    "model:compare": "python scripts/model_registry.py --compare",
+    "model:retrain": "python scripts/retrain_from_trade_results.py",
+    "model:train:challenger": "python scripts/train_forex_challenger_model.py",
+    "model:train:challenger:new": "python scripts/train_forex_challenger_model.py --observations",
+    "data:label:forex": "node scripts/label_forex_ml_observations.js",
+    "data:backfill:crypto": "node scripts/backfill_crypto_trade_results.js",
+    "data:recover:crypto-features": "node scripts/reconstruct_crypto_trade_features.js --apply",
+    "crypto:data": "python scripts/fetch_crypto_binance_data.py",
+    "crypto:train": "python scripts/train_crypto_m5_model.py",
+    "crypto:retrain:results": "python scripts/train_crypto_from_trade_results.py",
+    "crypto:model:list": "python scripts/model_registry.py --crypto",
+    "crypto:scan": "node -e \"import('./services/cryptoEngine.js').then(m => m.executeCryptoScanCycle())\"",
+    "test-db": "node scripts/test-db.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mysql2": "^3.10.1",
+    "technicalindicators": "^3.1.0",
+    "yahoo-finance2": "^2.11.3"
+  }
+}

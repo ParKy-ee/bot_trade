@@ -1,0 +1,586 @@
+{
+  "active_version": "v1.6.0",
+  "versions": [
+    {
+      "version": "v1.0.0",
+      "created_at": "2026-09-08T15:30:00+07:00",
+      "description": "Baseline Dual-Model Forex M5 (LightGBM + Random Forest)",
+      "file": "versions/forex_m5_model_v1.0.0.joblib",
+      "dataset": {
+        "total_samples": 44559,
+        "historical_samples": 44559,
+        "live_trade_samples": 0,
+        "train_samples": 35647,
+        "test_samples": 8912,
+        "positive_rate_buy": 0.0563,
+        "positive_rate_sell": 0.1194
+      },
+      "architecture": "Dual Ensemble (LightGBM 50% + Random Forest 50%)",
+      "weights": {
+        "lightgbm": 0.5,
+        "random_forest": 0.5
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "macd_hist"
+      ],
+      "parameters": {
+        "lightgbm": {
+          "n_estimators": 120,
+          "learning_rate": 0.04,
+          "max_depth": 5,
+          "num_leaves": 25,
+          "random_state": 42
+        },
+        "random_forest": {
+          "n_estimators": 100,
+          "max_depth": 6,
+          "random_state": 42
+        }
+      },
+      "metrics": {
+        "roc_auc_buy": 0.764,
+        "roc_auc_sell": 0.771,
+        "pr_auc_buy": 0.112,
+        "pr_auc_sell": 0.215,
+        "accuracy_buy": 0.785,
+        "accuracy_sell": 0.682,
+        "precision_buy": 0.121,
+        "precision_sell": 0.224,
+        "recall_buy": 0.421,
+        "recall_sell": 0.71,
+        "specificity_buy": 0.801,
+        "specificity_sell": 0.678,
+        "f1_buy": 0.188,
+        "f1_sell": 0.341,
+        "f05_buy": 0.141,
+        "f05_sell": 0.258,
+        "log_loss_buy": 0.192,
+        "log_loss_sell": 0.298,
+        "brier_buy": 0.054,
+        "brier_sell": 0.098,
+        "mcc_buy": 0.142,
+        "mcc_sell": 0.265
+      }
+    },
+    {
+      "version": "v1.1.0",
+      "created_at": "2026-09-10T09:37:32+07:00",
+      "description": "Unified Tri-Ensemble with 13 Quantitative Features + Realized DB Experience (87 Trades)",
+      "file": "versions/forex_m5_model_v1.1.0.joblib",
+      "dataset": {
+        "total_samples": 44994,
+        "historical_samples": 44994,
+        "live_trade_samples": 87,
+        "train_samples": 36082,
+        "test_samples": 8912,
+        "positive_rate_buy": 0.0563,
+        "positive_rate_sell": 0.1194
+      },
+      "architecture": "Tri-Ensemble (LightGBM 35% + XGBoost 25% + CatBoost 25% + Random Forest 15%)",
+      "weights": {
+        "lightgbm": 0.35,
+        "xgboost": 0.25,
+        "catboost": 0.25,
+        "random_forest": 0.15
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "macd_hist",
+        "csm_spread",
+        "h1_trend_slope",
+        "is_jpy",
+        "time_sin_hour",
+        "time_cos_hour",
+        "spread_to_atr"
+      ],
+      "parameters": {
+        "lightgbm": {
+          "n_estimators": 140,
+          "learning_rate": 0.035,
+          "max_depth": 5,
+          "num_leaves": 25,
+          "random_state": 42
+        },
+        "xgboost": {
+          "n_estimators": 120,
+          "learning_rate": 0.04,
+          "max_depth": 4,
+          "eval_metric": "logloss",
+          "random_state": 42
+        },
+        "catboost": {
+          "iterations": 120,
+          "learning_rate": 0.04,
+          "depth": 5,
+          "random_seed": 42
+        },
+        "random_forest": {
+          "n_estimators": 100,
+          "max_depth": 6,
+          "random_state": 42
+        }
+      },
+      "metrics": {
+        "roc_auc_buy": 0.7971,
+        "roc_auc_sell": 0.7975,
+        "pr_auc_buy": 0.1329,
+        "pr_auc_sell": 0.2594,
+        "accuracy_buy": 0.8085,
+        "accuracy_sell": 0.7042,
+        "precision_buy": 0.142,
+        "precision_sell": 0.2519,
+        "recall_buy": 0.4761,
+        "recall_sell": 0.75,
+        "specificity_buy": 0.8283,
+        "specificity_sell": 0.698,
+        "f1_buy": 0.2188,
+        "f1_sell": 0.3771,
+        "f05_buy": 0.1652,
+        "f05_sell": 0.2905,
+        "log_loss_buy": 0.1783,
+        "log_loss_sell": 0.2799,
+        "brier_buy": 0.0499,
+        "brier_sell": 0.0911,
+        "mcc_buy": 0.1793,
+        "mcc_sell": 0.3035
+      }
+    },
+    {
+      "version": "v1.2.0",
+      "created_at": "2026-09-11T11:27:02.786101",
+      "description": "Retrained Tri-Ensemble incorporating 94 live DB trades",
+      "file": "versions/forex_m5_model_v1.2.0.joblib",
+      "dataset": {
+        "total_samples": 45029,
+        "historical_samples": 44559,
+        "live_trade_samples": 94,
+        "train_samples": 36023,
+        "test_samples": 9006,
+        "positive_rate_buy": 0.0582,
+        "positive_rate_sell": 0.1302
+      },
+      "architecture": "Tri-Ensemble (LightGBM + XGBoost + CatBoost + Random Forest)",
+      "weights": {
+        "lightgbm": 0.35,
+        "xgboost": 0.25,
+        "catboost": 0.25,
+        "random_forest": 0.15
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "macd_hist",
+        "csm_spread",
+        "h1_trend_slope",
+        "is_jpy",
+        "time_sin_hour",
+        "time_cos_hour",
+        "spread_to_atr"
+      ],
+      "parameters": {
+        "lightgbm": {
+          "n_estimators": 140,
+          "learning_rate": 0.035,
+          "max_depth": 5,
+          "num_leaves": 25
+        },
+        "xgboost": {
+          "n_estimators": 120,
+          "learning_rate": 0.04,
+          "max_depth": 4,
+          "eval_metric": "logloss"
+        },
+        "catboost": {
+          "iterations": 120,
+          "learning_rate": 0.04,
+          "depth": 5
+        },
+        "random_forest": {
+          "n_estimators": 100,
+          "max_depth": 6
+        }
+      },
+      "metrics": {
+        "roc_auc_buy": 0.8114,
+        "roc_auc_sell": 0.8236,
+        "pr_auc_buy": 0.1789,
+        "pr_auc_sell": 0.3488,
+        "accuracy_buy": 0.9187,
+        "accuracy_sell": 0.8187,
+        "precision_buy": 0.2158,
+        "precision_sell": 0.3448,
+        "recall_buy": 0.1508,
+        "recall_sell": 0.4356,
+        "specificity_buy": 0.9662,
+        "specificity_sell": 0.876,
+        "f1_buy": 0.1775,
+        "f1_sell": 0.3849,
+        "f05_buy": 0.1987,
+        "f05_sell": 0.3598,
+        "log_loss_buy": 0.1812,
+        "log_loss_sell": 0.2934,
+        "brier_buy": 0.0508,
+        "brier_sell": 0.0959,
+        "mcc_buy": 0.1386,
+        "mcc_sell": 0.2829
+      }
+    },
+    {
+      "version": "v1.3.0",
+      "created_at": "2026-09-14T10:20:14.726360",
+      "description": "Retrained Tri-Ensemble incorporating 194 live DB trades",
+      "file": "versions/forex_m5_model_v1.3.0.joblib",
+      "dataset": {
+        "total_samples": 45529,
+        "historical_samples": 44559,
+        "live_trade_samples": 194,
+        "train_samples": 36423,
+        "test_samples": 9106,
+        "positive_rate_buy": 0.0642,
+        "positive_rate_sell": 0.1317
+      },
+      "architecture": "Tri-Ensemble (LightGBM + XGBoost + CatBoost + Random Forest)",
+      "weights": {
+        "lightgbm": 0.35,
+        "xgboost": 0.25,
+        "catboost": 0.25,
+        "random_forest": 0.15
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "macd_hist",
+        "csm_spread",
+        "h1_trend_slope",
+        "is_jpy",
+        "time_sin_hour",
+        "time_cos_hour",
+        "spread_to_atr"
+      ],
+      "parameters": {
+        "lightgbm": {
+          "n_estimators": 140,
+          "learning_rate": 0.035,
+          "max_depth": 5,
+          "num_leaves": 25
+        },
+        "xgboost": {
+          "n_estimators": 120,
+          "learning_rate": 0.04,
+          "max_depth": 4,
+          "eval_metric": "logloss"
+        },
+        "catboost": {
+          "iterations": 120,
+          "learning_rate": 0.04,
+          "depth": 5
+        },
+        "random_forest": {
+          "n_estimators": 100,
+          "max_depth": 6
+        }
+      },
+      "metrics": {
+        "roc_auc_buy": 0.7812,
+        "roc_auc_sell": 0.8071,
+        "pr_auc_buy": 0.1604,
+        "pr_auc_sell": 0.3197,
+        "accuracy_buy": 0.8622,
+        "accuracy_sell": 0.7495,
+        "precision_buy": 0.1729,
+        "precision_sell": 0.2957,
+        "recall_buy": 0.3026,
+        "recall_sell": 0.653,
+        "specificity_buy": 0.9006,
+        "specificity_sell": 0.7641,
+        "f1_buy": 0.22,
+        "f1_sell": 0.4071,
+        "f05_buy": 0.1891,
+        "f05_sell": 0.332,
+        "log_loss_buy": 0.1992,
+        "log_loss_sell": 0.3031,
+        "brier_buy": 0.0564,
+        "brier_sell": 0.0986,
+        "mcc_buy": 0.1577,
+        "mcc_sell": 0.3106
+      }
+    },
+    {
+      "version": "v1.4.0",
+      "created_at": "2026-09-15T08:38:26.631295",
+      "description": "Retrained Tri-Ensemble incorporating 212 live DB trades",
+      "file": "versions/forex_m5_model_v1.4.0.joblib",
+      "dataset": {
+        "total_samples": 45619,
+        "historical_samples": 44559,
+        "live_trade_samples": 212,
+        "train_samples": 36495,
+        "test_samples": 9124,
+        "positive_rate_buy": 0.0651,
+        "positive_rate_sell": 0.1332
+      },
+      "architecture": "Tri-Ensemble (LightGBM + XGBoost + CatBoost + Random Forest)",
+      "weights": {
+        "lightgbm": 0.35,
+        "xgboost": 0.25,
+        "catboost": 0.25,
+        "random_forest": 0.15
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "macd_hist",
+        "csm_spread",
+        "h1_trend_slope",
+        "is_jpy",
+        "time_sin_hour",
+        "time_cos_hour",
+        "spread_to_atr"
+      ],
+      "parameters": {
+        "lightgbm": {
+          "n_estimators": 140,
+          "learning_rate": 0.035,
+          "max_depth": 5,
+          "num_leaves": 25
+        },
+        "xgboost": {
+          "n_estimators": 120,
+          "learning_rate": 0.04,
+          "max_depth": 4,
+          "eval_metric": "logloss"
+        },
+        "catboost": {
+          "iterations": 120,
+          "learning_rate": 0.04,
+          "depth": 5
+        },
+        "random_forest": {
+          "n_estimators": 100,
+          "max_depth": 6
+        }
+      },
+      "metrics": {
+        "roc_auc_buy": 0.78,
+        "roc_auc_sell": 0.803,
+        "pr_auc_buy": 0.1608,
+        "pr_auc_sell": 0.3219,
+        "accuracy_buy": 0.8943,
+        "accuracy_sell": 0.7822,
+        "precision_buy": 0.181,
+        "precision_sell": 0.308,
+        "recall_buy": 0.1768,
+        "recall_sell": 0.5095,
+        "specificity_buy": 0.9443,
+        "specificity_sell": 0.8241,
+        "f1_buy": 0.1789,
+        "f1_sell": 0.3839,
+        "f05_buy": 0.1802,
+        "f05_sell": 0.3344,
+        "log_loss_buy": 0.2012,
+        "log_loss_sell": 0.3067,
+        "brier_buy": 0.057,
+        "brier_sell": 0.0998,
+        "mcc_buy": 0.1224,
+        "mcc_sell": 0.2735
+      }
+    },
+    {
+      "version": "v1.5.0",
+      "created_at": "2026-09-17T09:37:36.875246",
+      "description": "Retrained Tri-Ensemble incorporating 308 live DB trades and 814 labeled Forex ML observations",
+      "file": "versions/forex_m5_model_v1.5.0.joblib",
+      "dataset": {
+        "total_samples": 50169,
+        "historical_samples": 44559,
+        "live_trade_samples": 308,
+        "observation_samples": 814,
+        "observation_weight": 5,
+        "training_source": "dataset_forex_m5 + trade_results + forex_ml_observations",
+        "train_samples": 40135,
+        "test_samples": 10034,
+        "positive_rate_buy": 0.0841,
+        "positive_rate_sell": 0.1416
+      },
+      "architecture": "Tri-Ensemble (LightGBM + XGBoost + CatBoost + Random Forest)",
+      "weights": {
+        "lightgbm": 0.35,
+        "xgboost": 0.25,
+        "catboost": 0.25,
+        "random_forest": 0.15
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "macd_hist",
+        "csm_spread",
+        "h1_trend_slope",
+        "is_jpy",
+        "time_sin_hour",
+        "time_cos_hour",
+        "spread_to_atr"
+      ],
+      "parameters": {
+        "lightgbm": {
+          "n_estimators": 140,
+          "learning_rate": 0.035,
+          "max_depth": 5,
+          "num_leaves": 25
+        },
+        "xgboost": {
+          "n_estimators": 120,
+          "learning_rate": 0.04,
+          "max_depth": 4,
+          "eval_metric": "logloss"
+        },
+        "catboost": {
+          "iterations": 120,
+          "learning_rate": 0.04,
+          "depth": 5
+        },
+        "random_forest": {
+          "n_estimators": 100,
+          "max_depth": 6
+        }
+      },
+      "metrics": {
+        "roc_auc_buy": 0.7032,
+        "roc_auc_sell": 0.7441,
+        "pr_auc_buy": 0.1575,
+        "pr_auc_sell": 0.2684,
+        "accuracy_buy": 0.9127,
+        "accuracy_sell": 0.8275,
+        "precision_buy": 0.3806,
+        "precision_sell": 0.3202,
+        "recall_buy": 0.0604,
+        "recall_sell": 0.1942,
+        "specificity_buy": 0.991,
+        "specificity_sell": 0.932,
+        "f1_buy": 0.1043,
+        "f1_sell": 0.2418,
+        "f05_buy": 0.1848,
+        "f05_sell": 0.2834,
+        "log_loss_buy": 0.2547,
+        "log_loss_sell": 0.341,
+        "brier_buy": 0.074,
+        "brier_sell": 0.1104,
+        "mcc_buy": 0.1243,
+        "mcc_sell": 0.157
+      }
+    },
+    {
+      "version": "v1.6.0",
+      "created_at": "2026-09-17T21:05:03.274780",
+      "description": "Retrained Tri-Ensemble incorporating 683 live DB trades and 1824 labeled Forex ML observations",
+      "file": "versions/forex_m5_model_v1.6.0.joblib",
+      "dataset": {
+        "total_samples": 57094,
+        "historical_samples": 44559,
+        "live_trade_samples": 683,
+        "observation_samples": 1824,
+        "observation_weight": 5,
+        "training_source": "dataset_forex_m5 + trade_results + forex_ml_observations",
+        "train_samples": 45675,
+        "test_samples": 11419,
+        "positive_rate_buy": 0.0832,
+        "positive_rate_sell": 0.1073
+      },
+      "architecture": "Tri-Ensemble (LightGBM + XGBoost + CatBoost + Random Forest)",
+      "weights": {
+        "lightgbm": 0.35,
+        "xgboost": 0.25,
+        "catboost": 0.25,
+        "random_forest": 0.15
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "macd_hist",
+        "csm_spread",
+        "h1_trend_slope",
+        "is_jpy",
+        "time_sin_hour",
+        "time_cos_hour",
+        "spread_to_atr"
+      ],
+      "parameters": {
+        "lightgbm": {
+          "n_estimators": 140,
+          "learning_rate": 0.035,
+          "max_depth": 5,
+          "num_leaves": 25
+        },
+        "xgboost": {
+          "n_estimators": 120,
+          "learning_rate": 0.04,
+          "max_depth": 4,
+          "eval_metric": "logloss"
+        },
+        "catboost": {
+          "iterations": 120,
+          "learning_rate": 0.04,
+          "depth": 5
+        },
+        "random_forest": {
+          "n_estimators": 100,
+          "max_depth": 6
+        }
+      },
+      "metrics": {
+        "roc_auc_buy": 0.7236,
+        "roc_auc_sell": 0.6768,
+        "pr_auc_buy": 0.196,
+        "pr_auc_sell": 0.163,
+        "accuracy_buy": 0.8498,
+        "accuracy_sell": 0.5372,
+        "precision_buy": 0.2135,
+        "precision_sell": 0.1699,
+        "recall_buy": 0.3,
+        "recall_sell": 0.8531,
+        "specificity_buy": 0.8997,
+        "specificity_sell": 0.4992,
+        "f1_buy": 0.2495,
+        "f1_sell": 0.2834,
+        "f05_buy": 0.2266,
+        "f05_sell": 0.2023,
+        "log_loss_buy": 0.2628,
+        "log_loss_sell": 0.3369,
+        "brier_buy": 0.0745,
+        "brier_sell": 0.1037,
+        "mcc_buy": 0.1717,
+        "mcc_sell": 0.2187
+      }
+    }
+  ]
+}
