@@ -26,6 +26,7 @@
     "crypto:retrain:results": "python scripts/train_crypto_from_trade_results.py",
     "crypto:model:list": "python scripts/model_registry.py --crypto",
     "crypto:scan": "node -e \"import('./services/cryptoEngine.js').then(m => m.executeCryptoScanCycle())\"",
+    "pressure:drift": "node scripts/check_market_pressure_drift.mjs",
     "test-db": "node scripts/test-db.js"
   },
   "dependencies": {

@@ -468,33 +468,58 @@ def get_closed_deals():
         return {"error": msg}
 
     from datetime import datetime, timedelta
-    deals = mt5.history_deals_get(datetime.now() - timedelta(days=7), datetime.now() + timedelta(days=1))
+    try:
+        lookback_days = int(os.environ.get("MT5_DEAL_HISTORY_LOOKBACK_DAYS", "90"))
+    except (TypeError, ValueError):
+        lookback_days = 90
+    lookback_days = min(365, max(7, lookback_days))
+    deals = mt5.history_deals_get(datetime.now() - timedelta(days=lookback_days), datetime.now() + timedelta(days=1))
     if not deals:
         return []
 
-    result = []
+    deals_by_position = {}
     for d in deals:
-        # entry == 1 indicates an exit / closing deal in MT5
-        if getattr(d, 'entry', None) == 1:
-            result.append({
-                "deal": d.ticket,
-                "position": d.position_id,
-                "symbol": d.symbol,
-                "volume": d.volume,
-                "price": d.price,
-                "profit": d.profit,
-                "swap": getattr(d, 'swap', 0.0),
-                "commission": getattr(d, 'commission', 0.0),
-                "fee": getattr(d, 'fee', 0.0),
-                "netProfit": float(
-                    getattr(d, 'profit', 0.0)
-                    + getattr(d, 'swap', 0.0)
-                    + getattr(d, 'commission', 0.0)
-                    + getattr(d, 'fee', 0.0)
-                ),
-                "comment": d.comment,
-                "time": datetime.fromtimestamp(d.time).strftime("%Y-%m-%d %H:%M:%S")
-            })
+        position_id = int(getattr(d, 'position_id', 0) or 0)
+        if position_id <= 0:
+            continue
+        deals_by_position.setdefault(position_id, []).append(d)
+
+    result = []
+    for position_id, position_deals in deals_by_position.items():
+        # MT5 entry values 1/2/3 represent OUT, INOUT, and OUT_BY deals.
+        # Include opening deals in cash costs, but only closing deals in the
+        # execution-price average.
+        closing_deals = [d for d in position_deals if getattr(d, 'entry', None) in (1, 2, 3)]
+        if not closing_deals:
+            continue
+
+        closing_deals.sort(key=lambda d: (getattr(d, 'time_msc', 0), getattr(d, 'ticket', 0)))
+        latest_close = closing_deals[-1]
+        closing_volume = sum(float(getattr(d, 'volume', 0.0) or 0.0) for d in closing_deals)
+        exit_price = (
+            sum(float(d.price) * float(getattr(d, 'volume', 0.0) or 0.0) for d in closing_deals) / closing_volume
+            if closing_volume > 0
+            else float(latest_close.price)
+        )
+        gross_profit = sum(float(getattr(d, 'profit', 0.0) or 0.0) for d in position_deals)
+        swap = sum(float(getattr(d, 'swap', 0.0) or 0.0) for d in position_deals)
+        commission = sum(float(getattr(d, 'commission', 0.0) or 0.0) for d in position_deals)
+        fee = sum(float(getattr(d, 'fee', 0.0) or 0.0) for d in position_deals)
+
+        result.append({
+            "deal": latest_close.ticket,
+            "position": position_id,
+            "symbol": latest_close.symbol,
+            "volume": closing_volume,
+            "price": exit_price,
+            "profit": gross_profit,
+            "swap": swap,
+            "commission": commission,
+            "fee": fee,
+            "netProfit": float(gross_profit + swap + commission + fee),
+            "comment": latest_close.comment,
+            "time": datetime.fromtimestamp(latest_close.time).strftime("%Y-%m-%d %H:%M:%S")
+        })
     return result
 
 def place_pending_order(symbol, order_type_str, price, lot=0.01, sl=0.0, tp=0.0, expiration_minutes=45, comment="AI Pending Bot"):

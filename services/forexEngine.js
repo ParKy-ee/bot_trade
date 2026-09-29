@@ -6,11 +6,12 @@ import { placeOrder, placePendingOrder, getPendingOrders, cancelPendingOrder, mo
 import { recordTradeEntry, recordTradeExit, syncMt5PositionsWithDatabase } from './tradeResultTracker.js';
 import { predictForexConfidence, predictForexChallengerConfidence, predictForexRangeConfidence, predictForexExitChallenger, predictForexMarketPressure } from './modelPredictor.js';
 import { reviewTradeWithGemini } from './geminiReviewer.js';
-import { calculateDynamicForexExit, validateForexExitGeometry, evaluateAdversePressureExit } from './forexExitEngine.js';
+import { calculateDynamicForexExit, validateForexExitGeometry, evaluateAdversePressureExit, evaluateSrRejectionHarvest } from './forexExitEngine.js';
 import { calculateCurrencyStrength, getPairCsmSpread } from './currencyStrength.js';
-import { checkOverextension, checkRejectionCandle, checkCompressionBreakout, calculatePullbackLevel } from './forexPriceAction.js';
+import { checkOverextension, checkRejectionCandle, checkCompressionBreakout, calculatePullbackLevel, checkComprehensiveReversal } from './forexPriceAction.js';
 import { evaluateRangeExpertSetup } from './forexRangeExpert.js';
 import { buildForexFeatures, recordForexMlObservation, labelForexMlObservations } from './forexMlObservationTracker.js';
+import { initMarketPressureTable, recordMarketPressureObservation, labelMarketPressureObservations } from './marketPressureObservationTracker.js';
 import { createHash } from 'crypto';
 import dotenv from 'dotenv';
 
@@ -163,6 +164,15 @@ export function checkForexSessionGuard(date = new Date()) {
   const utcMinutes = date.getUTCMinutes();
   const bangkokTotalMinutes = ((utcHours + 7) % 24) * 60 + utcMinutes;
 
+  // Window 0: 04:00 - 06:30 น. (240 to 390 minutes) - Daily Rollover & Spread Spike Blackout
+  // During New York close / Asian open transition, broker spreads widen to 6-15 pips, causing immediate SL hits.
+  if (bangkokTotalMinutes >= 4 * 60 && bangkokTotalMinutes < 6 * 60 + 30) {
+    return {
+      blocked: true,
+      reason: `ช่วงเวลา Rollover ข้ามคืน (04:00 - 06:30 น. เวลาไทย) Spread โบรกเกอร์ถ่างกว้าง 6-15 pips เสี่ยงโดนกวาด SL ทันที`
+    };
+  }
+
   // Window 1: 16:00 - 17:00 (960 to 1020 minutes)
   if (bangkokTotalMinutes >= 16 * 60 && bangkokTotalMinutes < 17 * 60) {
     return {
@@ -187,6 +197,7 @@ function evaluatePocketProductionGuard({
   symbol,
   qualified,
   bias,
+  confidence = 0.50,
   activeTrack,
   confluenceScore,
   indicators,
@@ -194,13 +205,25 @@ function evaluatePocketProductionGuard({
   atr,
   isJpy,
   isPressureBypass = false,
-  isCounterPressure = false
+  isCounterPressure = false,
+  isPressureConfirmed = false,
+  isIndecisionChop = false
 } = {}) {
   const reasons = [];
   const direction = String(bias || '').toUpperCase();
-
+  // Counter-pressure is ALWAYS a hard shield (protects capital from entering an opposite trap)
   if (isCounterPressure) {
     reasons.push('market pressure detected strong opposite push (Counter-Pressure Shield)');
+  }
+
+  // Require directional market pressure confirmation for live execution (Dual-Engine: Signal + Market Pressure Modulation)
+  const requirePressureConfirmation = process.env.FOREX_REQUIRE_PRESSURE_CONFIRMATION !== 'false';
+  if (requirePressureConfirmation && activeTrack !== 'RANGE_MEAN_REVERSION') {
+    if (isIndecisionChop && Number(confidence || 0) < 0.60 && !isPressureBypass) {
+      reasons.push('market pressure in INDECISION_CHOP (confidence after damping < 60%)');
+    } else if (!isPressureConfirmed && !isPressureBypass && Number(confidence || 0) < 0.62) {
+      reasons.push('market pressure does not confirm direction (insufficient order flow momentum)');
+    }
   }
 
   if (!qualified || !['BUY', 'SELL'].includes(direction)) {
@@ -233,12 +256,13 @@ function evaluatePocketProductionGuard({
 
   if (bars && ['BUY', 'SELL'].includes(direction)) {
     const rejectionCheck = checkRejectionCandle(bars, direction, atr);
-    if (rejectionCheck.hasRejection && !isPressureBypass) {
+    if (rejectionCheck.hasRejection && !isPressureBypass && !isPressureConfirmed && Number(confidence || 0) < 0.70) {
       reasons.push(`rejection candle: ${rejectionCheck.reason}`);
     }
   }
 
-  if (!DATA_HARVEST_LIVE_MODE && process.env.FOREX_SESSION_GUARD_ENABLED !== 'false') {
+  // Session Guard & Rollover Blackout is strictly enforced on Live Execution
+  if (process.env.FOREX_SESSION_GUARD_ENABLED !== 'false') {
     const sessionGuard = checkForexSessionGuard();
     if (sessionGuard.blocked) reasons.push(sessionGuard.reason);
   }
@@ -350,13 +374,16 @@ async function evaluatePocketShadowTrades({ pool, rawData } = {}) {
       if (process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false') {
         try {
           const shadowPressure = await predictForexMarketPressure(bars, trade.symbol);
-          const pressureExit = evaluateAdversePressureExit({
+          const pressureExit = await evaluateAdversePressureExit({
             action,
             currClose,
             entryPrice,
             pipSize: 1.0 / pipMult,
             marketPressure: shadowPressure,
-            holdMinutes: holdMin
+            holdMinutes: holdMin,
+            slPrice: Number(trade.sl_price),
+            tpPrice: Number(trade.tp_price),
+            bars
           });
           if (pressureExit.shouldExit) {
             await recordTradeExit({
@@ -418,8 +445,11 @@ async function evaluatePocketShadowTrades({ pool, rawData } = {}) {
             atr_pips: atrPips
           });
 
-          // Check STALL_HARVEST (Lock in profit before reversal)
-          if (exitEval?.action === 'STALL_HARVEST' && exitEval?.probabilities?.stall_harvest >= 0.60 && floatingPips >= 2.0) {
+          const tpDistPips = trade.tp_price ? Math.abs(Number(trade.tp_price) - entryPrice) * pipMult : 15.0;
+          const minStallPips = Math.max(isJpy ? 6.0 : 4.0, 0.65 * tpDistPips);
+
+          // Check STALL_HARVEST (Lock in profit only after significant progress >= 65% TP and holdMin >= 15)
+          if (exitEval?.action === 'STALL_HARVEST' && exitEval?.probabilities?.stall_harvest >= 0.65 && floatingPips >= minStallPips && holdMin >= 15) {
             const exitReason = 'EXIT_CHALLENGER_STALL_HARVEST';
             await recordTradeExit({
               ticket: null,
@@ -428,12 +458,15 @@ async function evaluatePocketShadowTrades({ pool, rawData } = {}) {
               exitReason,
               tradeResultId: trade.id
             });
-            console.log(`🎯 [CHALLENGER_EXIT_V1.1.0] ${trade.symbol} ${action} STALL_HARVEST triggered @ ${currClose} (Locked +${floatingPips.toFixed(1)} pips | Prob: ${(exitEval.probabilities.stall_harvest * 100).toFixed(1)}%)`);
+            console.log(`🎯 [CHALLENGER_EXIT_V1.1.0] ${trade.symbol} ${action} STALL_HARVEST triggered @ ${currClose} (Locked +${floatingPips.toFixed(1)} pips [${((floatingPips/tpDistPips)*100).toFixed(0)}% TP] | Prob: ${(exitEval.probabilities.stall_harvest * 100).toFixed(1)}%)`);
             continue;
           }
 
-          // Check EARLY_CUT (Cut loss before full Hard SL)
-          if (exitEval?.action === 'EARLY_CUT' && exitEval?.probabilities?.early_cut >= 0.55 && floatingPips <= -2.0) {
+          // Check EARLY_CUT (Cut loss before full Hard SL - only on genuine severe drawdown)
+          const earlyCutThresholdPips = isJpy
+            ? Number(process.env.FOREX_PRESSURE_EARLY_CUT_PIPS_JPY || -8.0)
+            : Number(process.env.FOREX_PRESSURE_EARLY_CUT_PIPS_MAJOR || -6.0);
+          if (exitEval?.action === 'EARLY_CUT' && exitEval?.probabilities?.early_cut >= 0.60 && floatingPips <= earlyCutThresholdPips && holdMin >= 10) {
             const exitReason = 'EXIT_CHALLENGER_EARLY_CUT';
             await recordTradeExit({
               ticket: null,
@@ -585,6 +618,7 @@ export async function checkConsecutiveLossCircuitBreaker(pool, symbol) {
 export async function executeForexScanCycle() {
   console.log(`[*] [${new Date().toISOString()}] 💱 เริ่มรอบการสแกนตลาด Forex (คู่เงิน)...`);
   const pool = await getPool();
+  await initMarketPressureTable(pool);
 
   // 1. Fetch market data for Forex Universe in Parallel (Concurrent MT5 fetch)
   let rawData = {};
@@ -673,38 +707,43 @@ export async function executeForexScanCycle() {
 
       const entryTime = pos.entry_date ? new Date(pos.entry_date).getTime() : Date.now();
       const holdMinutes = (Date.now() - entryTime) / (1000 * 60);
-      const maxHoldMinutes = Number(process.env.FOREX_MAX_HOLD_MINUTES || 30);
+      const maxHoldMinutes = Number(process.env.FOREX_MAX_HOLD_MINUTES || 60);
       const minExpansionPips = Math.max(8, (1.2 * atr) / pipSize);
 
       const tpPrice = Number(pos.tp_price);
       const isStallEnabled = process.env.FOREX_STALL_HARVEST_ENABLED !== 'false';
-      const stallTriggerPct = Number(process.env.FOREX_STALL_TRIGGER_PCT || 0.70);
+      const stallTriggerPct = Number(process.env.FOREX_STALL_TRIGGER_PCT || 0.75);
       const stallMinHold = Number(process.env.FOREX_STALL_MIN_HOLD_MINUTES || 15);
-      const stallPullbackPips = Math.max(1.5, (Number(process.env.FOREX_STALL_PULLBACK_ATR || 0.30) * atr) / pipSize);
+      const stallPullbackPips = Math.max(2.5, (Number(process.env.FOREX_STALL_PULLBACK_ATR || 0.35) * atr) / pipSize);
 
       const tier1Pct = Number(process.env.FOREX_TIER1_TRIGGER_PCT || 0.40);
       const tier2Pct = Number(process.env.FOREX_TIER2_TRIGGER_PCT || 0.60);
       const tier3Pct = Number(process.env.FOREX_TIER3_TRIGGER_PCT || 0.80);
 
+      const isMicroScalpEnabled = process.env.FOREX_MICRO_SCALP_ENABLED === 'true';
       const isScalpMode = process.env.FOREX_SCALP_MODE !== 'false';
       const microHarvestPips = isJpy
-        ? Number(process.env.FOREX_MICRO_HARVEST_PIPS_JPY || 1.8)
-        : Number(process.env.FOREX_MICRO_HARVEST_PIPS_MAJOR || 1.0);
+        ? Number(process.env.FOREX_MICRO_HARVEST_PIPS_JPY || 5.5)
+        : Number(process.env.FOREX_MICRO_HARVEST_PIPS_MAJOR || 4.0);
       const microBeTriggerPips = Number(process.env.FOREX_MICRO_BE_TRIGGER_PIPS || 2.5);
       const stepdownMaxMinutes = Number(process.env.FOREX_STEPDOWN_MAX_MINUTES || 25);
       const stepdownMinPips = Number(process.env.FOREX_STEPDOWN_MIN_PIPS || 2.0);
+      let livePressure = null;
       // Active Market Pressure Guardian: Check for adverse momentum reversal (Profit Lock or Early Cut)
       if (process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false') {
         try {
-          const livePressure = await predictForexMarketPressure(bars, pos.symbol);
+          livePressure = await predictForexMarketPressure(bars, pos.symbol);
           const liveAction = isShort ? 'SELL' : 'BUY';
-          const pressureExit = evaluateAdversePressureExit({
+          const pressureExit = await evaluateAdversePressureExit({
             action: liveAction,
             currClose: currPrice,
             entryPrice,
             pipSize,
             marketPressure: livePressure,
-            holdMinutes
+            holdMinutes,
+            slPrice: Number(pos.sl_price),
+            tpPrice: Number(pos.tp_price),
+            bars
           });
 
           if (pressureExit.shouldExit) {
@@ -733,6 +772,106 @@ export async function executeForexScanCycle() {
         }
       }
 
+      // S/R Rejection Harvest: Lock in profits when price tests structural resistance/support and rejects
+      try {
+        const srHarvestCheck = evaluateSrRejectionHarvest({
+          action: isShort ? 'SELL' : 'BUY',
+          currentPrice: currPrice,
+          entryPrice,
+          bars,
+          atr,
+          pipSize,
+          holdMinutes,
+          minProfitAtrMult: 0.45,
+          minHoldMinutes: 5
+        });
+
+        if (srHarvestCheck.shouldExit) {
+          console.log(`🎯 [FOREX S/R REJECTION HARVEST] ${pos.symbol} (${isShort ? 'SELL' : 'BUY'}): ${srHarvestCheck.reason}`);
+          if (isMt5Live) {
+            try {
+              await closePosition(pos.mt5_ticket);
+            } catch (e) {
+              console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message);
+            }
+          }
+          await pool.query(
+            "UPDATE active_positions SET status_note = 'CLOSED_SR_REJECTION_HARVEST' WHERE symbol = ? AND market_type = 'forex'",
+            [pos.symbol]
+          );
+          await recordTradeExit({
+            ticket: pos.mt5_ticket,
+            symbol: pos.symbol,
+            exitPrice: currPrice,
+            exitReason: 'CLOSED_SR_REJECTION_HARVEST'
+          });
+          continue;
+        }
+      } catch (srErr) {
+        console.warn(`⚠️ Error evaluating S/R harvest exit for ${pos.symbol}:`, srErr.message);
+      }
+
+      // AI Intra-Trade Exit Challenger (Challenger-Exit-v1.1.0: Stall Harvest & Early Cut)
+      if (process.env.FOREX_CHALLENGER_EXIT_ENABLED !== 'false') {
+        try {
+          const floatingPips = isShort ? (entryPrice - currPrice) / pipSize : (currPrice - entryPrice) / pipSize;
+          const currentMfe = isShort ? (entryPrice - Math.min(newHighest, currPrice)) / pipSize : (Math.max(newHighest, currPrice) - entryPrice) / pipSize;
+          const givebackPips = Math.max(0, currentMfe - floatingPips);
+          const barRange = Math.max(1e-5, Number(lastBar.high) - Number(lastBar.low));
+          const candleBodyRatio = Math.abs(Number(lastBar.close) - Number(lastBar.open)) / barRange;
+          const upperWickRatio = (Number(lastBar.high) - Math.max(Number(lastBar.close), Number(lastBar.open))) / barRange;
+          const lowerWickRatio = (Math.min(Number(lastBar.close), Number(lastBar.open)) - Number(lastBar.low)) / barRange;
+          const adversePressure = Number(livePressure?.probabilities?.[isShort ? 'buy' : 'sell'] || 0.0);
+          const rsi = Number(lastBar.rsi || 50.0);
+          const atrPips = atr / pipSize;
+
+          const exitEval = await predictForexExitChallenger({
+            is_buy: isShort ? 0 : 1,
+            bar_index: Math.max(1, Math.round(holdMinutes / 5)),
+            floating_pips: floatingPips,
+            cum_mfe_pips: currentMfe,
+            cum_mae_pips: Math.abs(Math.min(0, floatingPips)),
+            giveback_pips: givebackPips,
+            candle_body_ratio: candleBodyRatio,
+            upper_wick_ratio: upperWickRatio,
+            lower_wick_ratio: lowerWickRatio,
+            adverse_pressure: adversePressure,
+            rsi,
+            atr_pips: atrPips
+          });
+
+          const liveTpPips = (pos.tp_price && Number(pos.tp_price) > 0)
+            ? Math.abs(Number(pos.tp_price) - entryPrice) / pipSize
+            : 15.0;
+          const minStallHarvestPips = Math.max(isJpy ? 7.0 : 5.0, 0.65 * liveTpPips);
+
+          if (exitEval?.action === 'STALL_HARVEST' && exitEval?.probabilities?.stall_harvest >= 0.65 && floatingPips >= minStallHarvestPips && holdMinutes >= 15) {
+            console.log(`🎯 [AI STALL HARVEST (LIVE)] ${pos.symbol} (${isShort ? 'SELL' : 'BUY'}): Locked +${floatingPips.toFixed(1)} pips [${((floatingPips/liveTpPips)*100).toFixed(0)}% TP] (Prob: ${(exitEval.probabilities.stall_harvest * 100).toFixed(1)}%) -> ปิดทำกำไรตัดรอบ!`);
+            if (isMt5Live) {
+              try { await closePosition(pos.mt5_ticket); } catch (e) { console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message); }
+            }
+            await pool.query("UPDATE active_positions SET status_note = 'CLOSED_STALL_HARVEST' WHERE symbol = ? AND market_type = 'forex'", [pos.symbol]);
+            await recordTradeExit({ ticket: pos.mt5_ticket, symbol: pos.symbol, exitPrice: currPrice, exitReason: 'CLOSED_STALL_HARVEST' });
+            continue;
+          }
+
+          const earlyCutThresholdPips = isJpy
+            ? Number(process.env.FOREX_PRESSURE_EARLY_CUT_PIPS_JPY || -8.0)
+            : Number(process.env.FOREX_PRESSURE_EARLY_CUT_PIPS_MAJOR || -6.0);
+          if (exitEval?.action === 'EARLY_CUT' && exitEval?.probabilities?.early_cut >= 0.60 && floatingPips <= earlyCutThresholdPips && holdMinutes >= 10) {
+            console.log(`✂️ [AI EARLY CUT (LIVE)] ${pos.symbol} (${isShort ? 'SELL' : 'BUY'}): Floating ${floatingPips.toFixed(1)} pips (Prob: ${(exitEval.probabilities.early_cut * 100).toFixed(1)}%) -> ชิงตัดขาดทุนก่อนชน Hard SL!`);
+            if (isMt5Live) {
+              try { await closePosition(pos.mt5_ticket); } catch (e) { console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message); }
+            }
+            await pool.query("UPDATE active_positions SET status_note = 'CLOSED_EARLY_CUT' WHERE symbol = ? AND market_type = 'forex'", [pos.symbol]);
+            await recordTradeExit({ ticket: pos.mt5_ticket, symbol: pos.symbol, exitPrice: currPrice, exitReason: 'CLOSED_EARLY_CUT' });
+            continue;
+          }
+        } catch (challengerExitErr) {
+          console.warn(`⚠️ [manageForexPositions] AI Exit Challenger warning for ${pos.symbol}:`, challengerExitErr.message);
+        }
+      }
+
       if (isShort) {
         newHighest = Math.min(newHighest, currPrice); // stores lowest reached price
         const tpDistancePips = (tpPrice && tpPrice < entryPrice) ? Math.max(1, (entryPrice - tpPrice) / pipSize) : (isScalpMode ? 2.5 : 15);
@@ -740,8 +879,8 @@ export async function executeForexScanCycle() {
         const maxProfitPips = (entryPrice - newHighest) / pipSize;
         const maxProfitRatio = maxProfitPips / tpDistancePips;
 
-        // 0. Micro-Scalp Instant Harvest: Quick profit snatch (0.5 - 1.5 pips net target)
-        if (isScalpMode && profitPips >= microHarvestPips) {
+        // 0. Micro-Scalp Instant Harvest: Quick profit snatch (only when explicitly enabled)
+        if (isMicroScalpEnabled && profitPips >= microHarvestPips) {
           console.log(`⚡ [Forex Micro-Scalp Harvest] ${pos.symbol} (SELL) กำไรแตะ +${profitPips.toFixed(1)} pips (>= ${microHarvestPips} pips) -> ปิดรวบกำไรทันที!`);
           if (isMt5Live) {
             try {
@@ -786,9 +925,9 @@ export async function executeForexScanCycle() {
           continue;
         }
 
-        // 1. Momentum Stall Harvester: Reached >= 60% TP and pulled back or stalling for >= 10 min
+        // 1. Momentum Stall Harvester: Reached >= 75% TP and pulled back or stalling for >= 15 min
         if (isStallEnabled && holdMinutes >= stallMinHold && maxProfitRatio >= stallTriggerPct) {
-          if (profitPips <= maxProfitPips - stallPullbackPips && profitPips >= 0.30 * tpDistancePips) {
+          if (profitPips <= maxProfitPips - stallPullbackPips && profitPips >= 0.55 * tpDistancePips) {
             console.log(`🎯 [Forex Stall Harvest] ${pos.symbol} (SELL) แตะ ${Math.round(maxProfitRatio * 100)}% TP (+${maxProfitPips.toFixed(1)} pips) แล้วเริ่มหมดแรงย่อตัว (+${profitPips.toFixed(1)} pips) -> ปิดทำกำไรล็อกกำไรทันที!`);
             if (isMt5Live) {
               try {
@@ -811,27 +950,41 @@ export async function executeForexScanCycle() {
           }
         }
 
-        // 2. Strict Time-Decay Hard Exit: Position held >= maxHoldMinutes (20-30m) -> Close immediately to prevent lingering
+        // 2. Cost-Aware Time-Decay Exit: Guard against broker spread trap
+        const spreadThreshold = isJpy ? Number(process.env.FOREX_SPREAD_GUARD_JPY || 2.2) : Number(process.env.FOREX_SPREAD_GUARD_MAJOR || 1.6);
+        const isTrappedInSpread = profitPips > 0 && profitPips < spreadThreshold;
+        const maxGraceMinutes = maxHoldMinutes + Number(process.env.FOREX_TIME_STOP_GRACE_MINUTES || 15);
+
         if (holdMinutes >= maxHoldMinutes) {
-          console.log(`⏰ [Forex Scalp Time-Stop] ${pos.symbol} (SELL) ถือครองครบ ${Math.round(holdMinutes)} นาที (>= ${maxHoldMinutes}m) -> ปิดออเดอร์ตัดรอบทันที (${profitPips > 0 ? '+' : ''}${profitPips.toFixed(1)} pips)`);
-          if (isMt5Live) {
-            try {
-              await closePosition(pos.mt5_ticket);
-            } catch (e) {
-              console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message);
+          if (isTrappedInSpread && holdMinutes < maxGraceMinutes) {
+            // Trapped in spread: Do NOT market-close into a guaranteed loss!
+            // Lock capital by setting Breakeven Stop Loss on MT5
+            const beSl = Number((entryPrice - (0.1 * pipSize)).toFixed(dec));
+            if (!newSl || beSl < newSl) {
+              newSl = beSl;
             }
+            console.log(`🛡️ [Time-Stop Guard] ${pos.symbol} (SELL) ถือครองครบ ${Math.round(holdMinutes)}m แต่กำไรบวกบาง (+${profitPips.toFixed(1)}p < สเปรด ${spreadThreshold}p) -> ขยับ SL ล็อกทุน (${newSl}) และขยายเวลาลุ้นแตะ Stepdown/TP!`);
+          } else {
+            console.log(`⏰ [Forex Scalp Time-Stop] ${pos.symbol} (SELL) ถือครองครบ ${Math.round(holdMinutes)} นาที (>= ${maxHoldMinutes}m) -> ปิดออเดอร์ตัดรอบทันที (${profitPips > 0 ? '+' : ''}${profitPips.toFixed(1)} pips)`);
+            if (isMt5Live) {
+              try {
+                await closePosition(pos.mt5_ticket);
+              } catch (e) {
+                console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message);
+              }
+            }
+            await pool.query(
+              "UPDATE active_positions SET status_note = 'CLOSED_TIME_STOP' WHERE symbol = ? AND market_type = 'forex'",
+              [pos.symbol]
+            );
+            await recordTradeExit({
+              ticket: pos.mt5_ticket,
+              symbol: pos.symbol,
+              exitPrice: currPrice,
+              exitReason: 'CLOSED_TIME_STOP'
+            });
+            continue;
           }
-          await pool.query(
-            "UPDATE active_positions SET status_note = 'CLOSED_TIME_STOP' WHERE symbol = ? AND market_type = 'forex'",
-            [pos.symbol]
-          );
-          await recordTradeExit({
-            ticket: pos.mt5_ticket,
-            symbol: pos.symbol,
-            exitPrice: currPrice,
-            exitReason: 'CLOSED_TIME_STOP'
-          });
-          continue;
         }
 
         // 3. Rollover Window Cutoff (03:45 - 04:00 Bangkok time): Exit stagnant scalps before spread blowout
@@ -953,8 +1106,8 @@ export async function executeForexScanCycle() {
         const maxProfitPips = (newHighest - entryPrice) / pipSize;
         const maxProfitRatio = maxProfitPips / tpDistancePips;
 
-        // 0. Micro-Scalp Instant Harvest: Quick profit snatch (0.5 - 1.5 pips net target)
-        if (isScalpMode && profitPips >= microHarvestPips) {
+        // 0. Micro-Scalp Instant Harvest: Quick profit snatch (only when explicitly enabled)
+        if (isMicroScalpEnabled && profitPips >= microHarvestPips) {
           console.log(`⚡ [Forex Micro-Scalp Harvest] ${pos.symbol} (BUY) กำไรแตะ +${profitPips.toFixed(1)} pips (>= ${microHarvestPips} pips) -> ปิดรวบกำไรทันที!`);
           if (isMt5Live) {
             try {
@@ -999,9 +1152,9 @@ export async function executeForexScanCycle() {
           continue;
         }
 
-        // 1. Momentum Stall Harvester: Reached >= 60% TP and pulled back or stalling for >= 10 min
+        // 1. Momentum Stall Harvester: Reached >= 75% TP and pulled back or stalling for >= 15 min
         if (isStallEnabled && holdMinutes >= stallMinHold && maxProfitRatio >= stallTriggerPct) {
-          if (profitPips <= maxProfitPips - stallPullbackPips && profitPips >= 0.30 * tpDistancePips) {
+          if (profitPips <= maxProfitPips - stallPullbackPips && profitPips >= 0.55 * tpDistancePips) {
             console.log(`🎯 [Forex Stall Harvest] ${pos.symbol} (BUY) แตะ ${Math.round(maxProfitRatio * 100)}% TP (+${maxProfitPips.toFixed(1)} pips) แล้วเริ่มหมดแรงย่อตัว (+${profitPips.toFixed(1)} pips) -> ปิดทำกำไรล็อกกำไรทันที!`);
             if (isMt5Live) {
               try {
@@ -1024,27 +1177,41 @@ export async function executeForexScanCycle() {
           }
         }
 
-        // 2. Strict Time-Decay Hard Exit: Position held >= maxHoldMinutes (20-30m) -> Close immediately to prevent lingering
+        // 2. Cost-Aware Time-Decay Exit: Guard against broker spread trap
+        const spreadThreshold = isJpy ? Number(process.env.FOREX_SPREAD_GUARD_JPY || 2.2) : Number(process.env.FOREX_SPREAD_GUARD_MAJOR || 1.6);
+        const isTrappedInSpread = profitPips > 0 && profitPips < spreadThreshold;
+        const maxGraceMinutes = maxHoldMinutes + Number(process.env.FOREX_TIME_STOP_GRACE_MINUTES || 15);
+
         if (holdMinutes >= maxHoldMinutes) {
-          console.log(`⏰ [Forex Scalp Time-Stop] ${pos.symbol} (BUY) ถือครองครบ ${Math.round(holdMinutes)} นาที (>= ${maxHoldMinutes}m) -> ปิดออเดอร์ตัดรอบทันที (${profitPips > 0 ? '+' : ''}${profitPips.toFixed(1)} pips)`);
-          if (isMt5Live) {
-            try {
-              await closePosition(pos.mt5_ticket);
-            } catch (e) {
-              console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message);
+          if (isTrappedInSpread && holdMinutes < maxGraceMinutes) {
+            // Trapped in spread: Do NOT market-close into a guaranteed loss!
+            // Lock capital by setting Breakeven Stop Loss on MT5
+            const beSl = Number((entryPrice + (0.1 * pipSize)).toFixed(dec));
+            if (!newSl || beSl > newSl) {
+              newSl = beSl;
             }
+            console.log(`🛡️ [Time-Stop Guard] ${pos.symbol} (BUY) ถือครองครบ ${Math.round(holdMinutes)}m แต่กำไรบวกบาง (+${profitPips.toFixed(1)}p < สเปรด ${spreadThreshold}p) -> ขยับ SL ล็อกทุน (${newSl}) และขยายเวลาลุ้นแตะ Stepdown/TP!`);
+          } else {
+            console.log(`⏰ [Forex Scalp Time-Stop] ${pos.symbol} (BUY) ถือครองครบ ${Math.round(holdMinutes)} นาที (>= ${maxHoldMinutes}m) -> ปิดออเดอร์ตัดรอบทันที (${profitPips > 0 ? '+' : ''}${profitPips.toFixed(1)} pips)`);
+            if (isMt5Live) {
+              try {
+                await closePosition(pos.mt5_ticket);
+              } catch (e) {
+                console.warn(`⚠️ MT5 close error ticket #${pos.mt5_ticket}:`, e.message);
+              }
+            }
+            await pool.query(
+              "UPDATE active_positions SET status_note = 'CLOSED_TIME_STOP' WHERE symbol = ? AND market_type = 'forex'",
+              [pos.symbol]
+            );
+            await recordTradeExit({
+              ticket: pos.mt5_ticket,
+              symbol: pos.symbol,
+              exitPrice: currPrice,
+              exitReason: 'CLOSED_TIME_STOP'
+            });
+            continue;
           }
-          await pool.query(
-            "UPDATE active_positions SET status_note = 'CLOSED_TIME_STOP' WHERE symbol = ? AND market_type = 'forex'",
-            [pos.symbol]
-          );
-          await recordTradeExit({
-            ticket: pos.mt5_ticket,
-            symbol: pos.symbol,
-            exitPrice: currPrice,
-            exitReason: 'CLOSED_TIME_STOP'
-          });
-          continue;
         }
 
         // 3. Rollover Window Cutoff (03:45 - 04:00 Bangkok time)
@@ -1218,13 +1385,16 @@ export async function executeForexScanCycle() {
         if (process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false') {
           try {
             const shadowPressure = await predictForexMarketPressure(bars, shadow.symbol);
-            const pExit = evaluateAdversePressureExit({
+            const pExit = await evaluateAdversePressureExit({
               action: shadow.action,
               currClose,
               entryPrice,
               pipSize,
               marketPressure: shadowPressure,
-              holdMinutes: holdMin
+              holdMinutes: holdMin,
+              slPrice,
+              tpPrice,
+              bars
             });
             if (pExit.shouldExit) {
               exitReason = pExit.exitReason;
@@ -1251,12 +1421,19 @@ export async function executeForexScanCycle() {
           } else if (isScalpMode && holdMin >= stepdownMaxMinutes && currProfitPips >= stepdownMinPips) {
             exitReason = 'CLOSED_STEPDOWN_PROFIT';
             exitPrice = currClose;
-          } else if (isStallEnabled && holdMin >= 10 && maxProfitRatio >= 0.60 && currProfitPips <= maxProfitPips - stallPullbackPips && currProfitPips >= 0.30 * tpDistancePips) {
+          } else if (isStallEnabled && holdMin >= 15 && maxProfitRatio >= 0.75 && currProfitPips <= maxProfitPips - stallPullbackPips && currProfitPips >= 0.55 * tpDistancePips) {
             exitReason = 'CLOSED_STALL_HARVEST';
             exitPrice = currClose;
           } else if (holdMin >= maxHoldMinutes) {
-            exitReason = 'CLOSED_TIME_STOP';
-            exitPrice = currClose;
+            const spreadThreshold = isJpy ? 2.2 : 1.6;
+            const isTrappedInSpread = currProfitPips > 0 && currProfitPips < spreadThreshold;
+            const maxGraceMinutes = maxHoldMinutes + 15;
+            if (isTrappedInSpread && holdMin < maxGraceMinutes) {
+              // Grace period: allow to run towards stepdown/TP
+            } else {
+              exitReason = 'CLOSED_TIME_STOP';
+              exitPrice = currClose;
+            }
           }
         } else {
           const maxProfitPips = (entryPrice - currLow) / pipSize;
@@ -1276,12 +1453,19 @@ export async function executeForexScanCycle() {
           } else if (isScalpMode && holdMin >= stepdownMaxMinutes && currProfitPips >= stepdownMinPips) {
             exitReason = 'CLOSED_STEPDOWN_PROFIT';
             exitPrice = currClose;
-          } else if (isStallEnabled && holdMin >= 10 && maxProfitRatio >= 0.60 && currProfitPips <= maxProfitPips - stallPullbackPips && currProfitPips >= 0.30 * tpDistancePips) {
+          } else if (isStallEnabled && holdMin >= 15 && maxProfitRatio >= 0.75 && currProfitPips <= maxProfitPips - stallPullbackPips && currProfitPips >= 0.55 * tpDistancePips) {
             exitReason = 'CLOSED_STALL_HARVEST';
             exitPrice = currClose;
           } else if (holdMin >= maxHoldMinutes) {
-            exitReason = 'CLOSED_TIME_STOP';
-            exitPrice = currClose;
+            const spreadThreshold = isJpy ? 2.2 : 1.6;
+            const isTrappedInSpread = currProfitPips > 0 && currProfitPips < spreadThreshold;
+            const maxGraceMinutes = maxHoldMinutes + 15;
+            if (isTrappedInSpread && holdMin < maxGraceMinutes) {
+              // Grace period: allow to run towards stepdown/TP
+            } else {
+              exitReason = 'CLOSED_TIME_STOP';
+              exitPrice = currClose;
+            }
           }
         }
 
@@ -1320,6 +1504,14 @@ export async function executeForexScanCycle() {
     let marketPressure = null;
     try {
       marketPressure = await predictForexMarketPressure(bars, symbol);
+      if (marketPressure) {
+        await recordMarketPressureObservation({
+          pool,
+          symbol,
+          barTime: lastBar.time,
+          pressureResult: marketPressure
+        });
+      }
     } catch (err) {
       console.warn(`[MarketPressure] Inference error for ${symbol}:`, err.message);
     }
@@ -1376,6 +1568,7 @@ export async function executeForexScanCycle() {
     }
 
     // Calculate CSM spread & regime features early
+    const cleanName = symbol.replace('=X', '');
     const isJpy = symbol.includes('JPY');
     const pipSize = isJpy ? 0.01 : 0.0001;
     const dec = isJpy ? 3 : 5;
@@ -1426,6 +1619,10 @@ export async function executeForexScanCycle() {
         mlMeta = mlRes;
         if (PRIMARY_MODEL_ROLE === 'challenger') challengerMlMeta = mlRes;
         else championMlMeta = mlRes;
+        if (mlRes?.modelAvailable === false) {
+          primaryModelError = true;
+          console.warn(`[Forex Model Gate] ${symbol}: Python model unavailable; blocking live entry`);
+        }
         confidence = mlRes?.confidence || 0.50;
 
         if (process.env.FOREX_SHADOW_HARVESTING === 'true') {
@@ -1476,14 +1673,138 @@ export async function executeForexScanCycle() {
       console.log(`📊 [RANGE LIVE QUALIFIED] ${symbol.replace('=X', '')} ${bias} @ ${currPrice.toFixed(dec)} | ${(rangeConfidence * 100).toFixed(1)}%`);
     }
 
-    confidence = Number(Math.min(0.95, Math.max(0.05, confidence)).toFixed(4));
+    // 1. Price Action Pattern Recognition & Fake Signal Detection (Model Pattern Detection)
+    let patternBonus = 0;
+    let entryMode = 'DEFAULT';
+    let entryPrice = currPrice;
+    let slAnchorPrice = filterResult?.reversalPivotPrice || null;
+    if (activeTrack === 'REVERSAL_CONVICTION') {
+      entryMode = 'REVERSAL_LIMIT';
+      patternBonus += 0.08; // +8% Conf for verified reversal setup
+      if (filterResult?.reversalSetupReason) {
+        reasons.push(`🎯 Reversal Conviction: ${filterResult.reversalSetupReason} (+8% Conf)`);
+      }
+    }
+
+    const compressionCheck = (qualified && (bias === 'BUY' || bias === 'SELL'))
+      ? checkCompressionBreakout(bars, bias, atr)
+      : { isCompressionBreakout: false };
+    const overextCheck = (qualified && (bias === 'BUY' || bias === 'SELL'))
+      ? checkOverextension(bars, indicators, bias)
+      : { isOverextended: false };
+    const rejectionCheck = (qualified && (bias === 'BUY' || bias === 'SELL'))
+      ? checkRejectionCandle(bars, bias, atr)
+      : { hasRejection: false };
+
+    // Reversal Trap Guard & Veto: If chart is forming an opposing reversal pattern against trend trade
+    const reversalTrapCheck = (qualified && (bias === 'BUY' || bias === 'SELL') && activeTrack !== 'REVERSAL_CONVICTION')
+      ? checkComprehensiveReversal(bars, indicators, bias)
+      : { hasOpposingReversal: false, isTrapVeto: false };
+
+    if (reversalTrapCheck.hasOpposingReversal) {
+      patternBonus -= reversalTrapCheck.confidencePenalty;
+      const revReason = `🚨 Opposing Reversal Trap: ${reversalTrapCheck.reason} (-${(reversalTrapCheck.confidencePenalty * 100).toFixed(0)}% Conf)`;
+      reasons.push(revReason);
+      console.log(`🚨 [REVERSAL TRAP DETECTED] ${symbol.replace('=X', '')} ${bias}: ${reversalTrapCheck.reason} (-${(reversalTrapCheck.confidencePenalty * 100).toFixed(0)}% Conf)`);
+    }
+
+    if (compressionCheck.isCompressionBreakout) {
+      entryMode = 'BREAKOUT';
+      slAnchorPrice = compressionCheck.slAnchorPrice;
+      patternBonus += 0.05; // +5% bonus for clean consolidation breakout pattern
+      const pReason = `⚡ Pattern Breakout: ${compressionCheck.reason} (+5% Conf)`;
+      reasons.push(pReason);
+      console.log(`⚡ [PATTERN BREAKOUT] ${symbol.replace('=X', '')}: ${compressionCheck.reason} (+5% Conf)`);
+    } else if (overextCheck.isOverextended) {
+      entryMode = 'PULLBACK';
+      const pullback = calculatePullbackLevel(indicators, bias, currPrice, pipSize);
+      entryPrice = Number(pullback.pullbackPrice.toFixed(dec));
+      patternBonus -= 0.05; // -5% deduction for overextended price chase
+      const pReason = `🔄 Overextended Guard: ${overextCheck.reason} -> PULLBACK LIMIT @ ${entryPrice.toFixed(dec)} (-5% Conf)`;
+      reasons.push(pReason);
+      console.log(`🔄 [OVEREXTENDED GUARD] ${symbol.replace('=X', '')}: ${overextCheck.reason} -> PULLBACK LIMIT @ ${entryPrice.toFixed(dec)}`);
+    }
+
+    // Fake Signal Filter: Long Rejection Wick against direction
+    if (rejectionCheck.hasRejection) {
+      patternBonus -= 0.15; // -15% penalty for rejection wick against trade
+      const fakeoutReason = `⚠️ Fake Signal Trap (Rejection Wick): ${rejectionCheck.reason} (-15% Conf)`;
+      reasons.push(fakeoutReason);
+      console.log(`⚠️ [FAKE SIGNAL TRAP] ${symbol.replace('=X', '')}: ${rejectionCheck.reason}`);
+    }
+
+    // 2. Market Pressure Confirmation: Dynamically adjusts (+/-) Order Confidence
+    const pBuy = Number(marketPressure?.probabilities?.buy_pressure || 0);
+    const pSell = Number(marketPressure?.probabilities?.sell_pressure || 0);
+    const pIndecision = Number(marketPressure?.probabilities?.indecision || 0);
+
+    const pressureCounterThreshold = Number(process.env.FOREX_PRESSURE_COUNTER_THRESHOLD || 0.42);
+    const pressureChopThreshold = Number(process.env.FOREX_PRESSURE_CHOP_THRESHOLD || 0.48);
+
+    const isCounterPressure = (bias === 'BUY' && (pSell >= pressureCounterThreshold || marketPressure?.state === 'SELL_PRESSURE'))
+      || (bias === 'SELL' && (pBuy >= pressureCounterThreshold || marketPressure?.state === 'BUY_PRESSURE'));
+    const isIndecisionChop = marketPressure?.state === 'INDECISION_CHOP' || pIndecision >= pressureChopThreshold;
+
+    let pressureDelta = 0;
+    let pressureReason = '';
+
+    if (bias === 'BUY') {
+      if (marketPressure?.state === 'BUY_PRESSURE') {
+        pressureDelta = 0.08 + Math.min(0.06, Math.max(0, (pBuy - 0.40) * 0.5)); // +8% to +14%
+        pressureReason = `🟢 Market Pressure ยืนยันแรงซื้อ BUY_PRESSURE (${(pBuy * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +${(pressureDelta * 100).toFixed(1)}%`;
+      } else if (pBuy > pSell && pBuy >= 0.35 && marketPressure?.state !== 'SELL_PRESSURE') {
+        pressureDelta = 0.04;
+        pressureReason = `🟢 Market Pressure โอนเอียงฝั่งซื้อ (${(pBuy * 100).toFixed(0)}% > ${(pSell * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +4.0%`;
+      } else if (isCounterPressure) {
+        pressureDelta = -0.25;
+        pressureReason = `🔴 Counter-Pressure ตรวจพบแรงฝั่งตรงข้ามสวนมา (${(pSell * 100).toFixed(0)}%) -> ลดความมั่นใจ -25.0%`;
+      } else if (isIndecisionChop) {
+        const chopWeight = Math.min(0.08, Math.max(0, (pIndecision - 0.35) * 0.5));
+        pressureDelta = -(0.08 + chopWeight); // -8% to -16%
+        pressureReason = `🟡 Market Pressure สภาวะ INDECISION_CHOP (${(pIndecision * 100).toFixed(0)}% ไร้แรงขับเคลื่อน) -> ปรับลดความมั่นใจ -${(Math.abs(pressureDelta) * 100).toFixed(1)}%`;
+      }
+    } else if (bias === 'SELL') {
+      if (marketPressure?.state === 'SELL_PRESSURE') {
+        pressureDelta = 0.08 + Math.min(0.06, Math.max(0, (pSell - 0.40) * 0.5)); // +8% to +14%
+        pressureReason = `🔴 Market Pressure ยืนยันแรงขาย SELL_PRESSURE (${(pSell * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +${(pressureDelta * 100).toFixed(1)}%`;
+      } else if (pSell > pBuy && pSell >= 0.35 && marketPressure?.state !== 'BUY_PRESSURE') {
+        pressureDelta = 0.04;
+        pressureReason = `🔴 Market Pressure โอนเอียงฝั่งขาย (${(pSell * 100).toFixed(0)}% > ${(pBuy * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +4.0%`;
+      } else if (isCounterPressure) {
+        pressureDelta = -0.25;
+        pressureReason = `🔴 Counter-Pressure ตรวจพบแรงฝั่งตรงข้ามสวนมา (${(pBuy * 100).toFixed(0)}%) -> ลดความมั่นใจ -25.0%`;
+      } else if (isIndecisionChop) {
+        const chopWeight = Math.min(0.08, Math.max(0, (pIndecision - 0.35) * 0.5));
+        pressureDelta = -(0.08 + chopWeight); // -8% to -16%
+        pressureReason = `🟡 Market Pressure สภาวะ INDECISION_CHOP (${(pIndecision * 100).toFixed(0)}% ไร้แรงขับเคลื่อน) -> ปรับลดความมั่นใจ -${(Math.abs(pressureDelta) * 100).toFixed(1)}%`;
+      }
+    }
+
+    const isPressureConfirmed = (bias === 'BUY' && (marketPressure?.state === 'BUY_PRESSURE' || (pBuy >= 0.35 && pBuy > pSell * 1.10)) && marketPressure?.state !== 'SELL_PRESSURE' && (!isIndecisionChop || pBuy >= 0.36))
+      || (bias === 'SELL' && (marketPressure?.state === 'SELL_PRESSURE' || (pSell >= 0.35 && pSell > pBuy * 1.10)) && marketPressure?.state !== 'BUY_PRESSURE' && (!isIndecisionChop || pSell >= 0.36));
+    const isPressureBypass = (bias === 'BUY' && (pBuy >= 0.40 || (marketPressure?.state === 'BUY_PRESSURE' && pBuy >= 0.38)))
+      || (bias === 'SELL' && (pSell >= 0.40 || (marketPressure?.state === 'SELL_PRESSURE' && pSell >= 0.38)));
+
+    // Combined Net Modulation (+/-)
+    const rawBaseConfidence = Number(confidence || 0.50);
+    const rawDirectionalScore = getDirectionalModelScore(mlMeta, bias);
+    const netDelta = pressureDelta + patternBonus;
+
+    confidence = Number(Math.min(0.98, Math.max(0.05, rawBaseConfidence + netDelta)).toFixed(4));
+    const pressureMultiplier = 1 + (netDelta / Math.max(0.20, rawBaseConfidence));
+    const primaryDirectionalScore = Number(Math.min(0.95, Math.max(0.01, rawDirectionalScore * pressureMultiplier)).toFixed(4));
+
+    if (pressureReason) {
+      reasons.push(pressureReason);
+      console.log(`🎯 [CONFIDENCE MODULATION] ${symbol.replace('=X', '')} ${bias}: Base ${(rawBaseConfidence * 100).toFixed(1)}% ${netDelta >= 0 ? '+' : ''}${(netDelta * 100).toFixed(1)}% (${pressureReason}) -> Modulated ${(confidence * 100).toFixed(1)}% | Score: ${rawDirectionalScore.toFixed(4)} -> ${primaryDirectionalScore.toFixed(4)}`);
+    }
+
     const dynamicExitEnabled = ['1', 'true', 'yes', 'on'].includes(
       String(process.env.FOREX_DYNAMIC_EXIT_ENABLED || 'false').toLowerCase()
     );
     const signalConfidenceThreshold = DATA_HARVEST_LIVE_MODE
       ? DATA_HARVEST_CONFIDENCE_THRESHOLD
       : (dynamicExitEnabled ? Number(process.env.FOREX_DYNAMIC_CONFIDENCE_THRESHOLD || CONFIDENCE_THRESHOLD) : CONFIDENCE_THRESHOLD);
-    const primaryDirectionalScore = getDirectionalModelScore(mlMeta, bias);
     const primaryUsesRawDirectionalScore = process.env.FOREX_USE_RAW_SCORE === 'true';
     const primaryEntryScore = primaryUsesRawDirectionalScore
       ? primaryDirectionalScore
@@ -1491,33 +1812,29 @@ export async function executeForexScanCycle() {
     const primaryEntryThreshold = primaryUsesRawDirectionalScore
       ? getRawDirectionalThreshold(bias)
       : signalConfidenceThreshold;
+
     let isSignal = !primaryModelError
       && qualified
       && (primaryEntryScore >= primaryEntryThreshold)
       && (bias === 'BUY' || bias === 'SELL');
+
     const liveProductionConfidenceThreshold = bias === 'BUY'
       ? POCKET_EVAL_PROD_BUY_THRESHOLD
       : POCKET_EVAL_PROD_SELL_THRESHOLD;
     const liveProductionScore = primaryDirectionalScore;
     const liveRawScoreGuardEnabled = LIVE_PRODUCTION_GUARD && primaryUsesRawDirectionalScore;
+
     if (liveRawScoreGuardEnabled && isSignal && liveProductionScore < liveProductionConfidenceThreshold) {
       isSignal = false;
-      reasons.push(`Production score ${liveProductionScore.toFixed(4)} < ${liveProductionConfidenceThreshold.toFixed(4)}`);
+      reasons.push(`Production score ${liveProductionScore.toFixed(4)} < ${liveProductionConfidenceThreshold.toFixed(4)} (หลังคำนวณ Market Pressure +/-)`);
     }
 
-    // Market Pressure Bypass & Counter-Pressure Veto Shield
-    const pBuy = Number(marketPressure?.probabilities?.buy_pressure || 0);
-    const pSell = Number(marketPressure?.probabilities?.sell_pressure || 0);
-    const isPressureBypass = (bias === 'BUY' && (pBuy >= 0.40 || marketPressure?.state === 'BUY_PRESSURE'))
-      || (bias === 'SELL' && (pSell >= 0.40 || marketPressure?.state === 'SELL_PRESSURE'));
-    const isCounterPressure = (bias === 'BUY' && pSell >= 0.40)
-      || (bias === 'SELL' && pBuy >= 0.40);
-
+    // Counter-pressure hard veto (safety shield)
     if (isCounterPressure && isSignal) {
       isSignal = false;
       const oppProb = bias === 'BUY' ? pSell : pBuy;
-      reasons.push(`🚫 Counter-Pressure Veto: Market Pressure detected opposite push (${(oppProb * 100).toFixed(0)}%)`);
-      console.log(`🛡️ [COUNTER-PRESSURE VETO] ${symbol.replace('=X', '')}: Opposite push ${(oppProb * 100).toFixed(0)}% -> Veto trade`);
+      reasons.push(`🚫 Counter-Pressure Veto: Market Pressure detected opposite push (${(oppProb * 100).toFixed(0)}% >= ${(pressureCounterThreshold * 100).toFixed(0)}% or ${marketPressure?.state})`);
+      console.log(`🛡️ [COUNTER-PRESSURE VETO] ${symbol.replace('=X', '')}: Opposite push ${(oppProb * 100).toFixed(0)}% (${marketPressure?.state}) -> Veto trade`);
     }
 
     // Phase 1: Dynamic Symbol Gating & Regime Filtering
@@ -1565,16 +1882,13 @@ export async function executeForexScanCycle() {
       }
     }
 
-    // 2.5 Rejection Candlestick Filter (Veto if long rejection wick >= threshold at S/R)
+    // 2.5 Rejection Candlestick Veto (Modulated by Pattern & Market Pressure Confirmation)
     const rejectionFilterEnabled = process.env.FOREX_REJECTION_FILTER_ENABLED === 'true'
       || (!DATA_HARVEST_LIVE_MODE && process.env.FOREX_REJECTION_FILTER_ENABLED !== 'false');
-    if (rejectionFilterEnabled && qualified && isSignal) {
-      const rejectionCheck = checkRejectionCandle(bars, bias, atr);
-      if (rejectionCheck.hasRejection && !isPressureBypass) {
-        isSignal = false;
-        reasons.push(`🚫 Rejection Veto: ${rejectionCheck.reason}`);
-        console.log(`🛡️ [REJECTION VETO (LIVE)] ${symbol.replace('=X', '')}: ${rejectionCheck.reason}`);
-      }
+    if (rejectionFilterEnabled && qualified && isSignal && rejectionCheck.hasRejection && !isPressureBypass && !isPressureConfirmed && confidence < 0.70) {
+      isSignal = false;
+      reasons.push(`🚫 Rejection Veto (Unconfirmed): ${rejectionCheck.reason}`);
+      console.log(`🛡️ [REJECTION VETO (LIVE)] ${cleanName}: ${rejectionCheck.reason} (ไร้แรง Market Pressure ยืนยัน)`);
     }
 
     const pocketProductionGuard = evaluatePocketProductionGuard({
@@ -1582,6 +1896,7 @@ export async function executeForexScanCycle() {
       symbol,
       qualified,
       bias,
+      confidence,
       activeTrack,
       confluenceScore,
       indicators,
@@ -1589,7 +1904,9 @@ export async function executeForexScanCycle() {
       atr,
       isJpy,
       isPressureBypass,
-      isCounterPressure
+      isCounterPressure,
+      isPressureConfirmed,
+      isIndecisionChop
     });
     if (LIVE_PRODUCTION_GUARD && isSignal && !pocketProductionGuard.passed) {
       isSignal = false;
@@ -1597,31 +1914,10 @@ export async function executeForexScanCycle() {
       console.log(`🛡️ [PRODUCTION GUARD] ${symbol.replace('=X', '')}: ${pocketProductionGuard.reasons.join('; ')}`);
     }
 
-    // 2.6 Dual-Mode Entry Resolution: Compression Pattern Breakout vs Overextended Pullback Guard
-    let entryMode = 'DEFAULT'; // 'DEFAULT' | 'BREAKOUT' | 'PULLBACK'
-    let entryPrice = currPrice;
-    let slAnchorPrice = null;
-
+    // 2.6 Smart Adaptive HTF Pullback Mode:
+    // If signal is Counter to H1 Trend, do NOT ban the trade (prevent scared bot),
+    // but convert from Market Order to Limit Pullback Order at EMA9/EMA21 support!
     if (qualified && isSignal) {
-      const compressionCheck = checkCompressionBreakout(bars, bias, atr);
-      const overextCheck = checkOverextension(bars, indicators, bias);
-
-      if (compressionCheck.isCompressionBreakout) {
-        entryMode = 'BREAKOUT';
-        slAnchorPrice = compressionCheck.slAnchorPrice;
-        reasons.push(`⚡ Pattern Breakout: ${compressionCheck.reason}`);
-        console.log(`⚡ [PATTERN BREAKOUT] ${symbol.replace('=X', '')}: ${compressionCheck.reason}`);
-      } else if (overextCheck.isOverextended) {
-        entryMode = 'PULLBACK';
-        const pullback = calculatePullbackLevel(indicators, bias, currPrice, pipSize);
-        entryPrice = Number(pullback.pullbackPrice.toFixed(dec));
-        reasons.push(`🔄 Pullback Mode: ${overextCheck.reason} -> ดักตั้งรับ Limit Order ที่ ${entryPrice.toFixed(dec)}`);
-        console.log(`🔄 [OVEREXTENDED GUARD] ${symbol.replace('=X', '')}: ${overextCheck.reason} -> ปรับเป็นโหมด PULLBACK LIMIT ที่ ${entryPrice.toFixed(dec)}`);
-      }
-
-      // 2.6.1 Smart Adaptive HTF Pullback Mode:
-      // If signal is Counter to H1 Trend, do NOT ban the trade (prevent scared bot),
-      // but convert from Market Order to Limit Pullback Order at EMA9/EMA21 support!
       const isCounterH1 = (bias === 'BUY' && h1TrendSlope < -0.0004) || (bias === 'SELL' && h1TrendSlope > 0.0004);
       if (isCounterH1 && entryMode === 'DEFAULT') {
         entryMode = 'PULLBACK';
@@ -1635,23 +1931,25 @@ export async function executeForexScanCycle() {
     // Calculate Scalp TP / SL. Dynamic mode is intentionally opt-in until its
     // walk-forward results are stable on more than one market regime.
     const isScalpMode = process.env.FOREX_SCALP_MODE !== 'false';
+    const currentAtrPips = (atr && pipSize) ? (atr / pipSize) : 10.0;
+    const dynamicMinSlJpy = Math.max(12, Math.round(1.2 * currentAtrPips));
+    const dynamicMinSlMajor = Math.max(8, Math.round(1.2 * currentAtrPips));
+
     const configuredMinSlPips = isJpy
-      ? Number(process.env.FOREX_DYNAMIC_MIN_SL_JPY || (isScalpMode ? 6 : 14))
-      : Number(process.env.FOREX_DYNAMIC_MIN_SL_MAJOR || (isScalpMode ? 4 : 6));
+      ? Number(process.env.FOREX_DYNAMIC_MIN_SL_JPY || (isScalpMode ? dynamicMinSlJpy : 16))
+      : Number(process.env.FOREX_DYNAMIC_MIN_SL_MAJOR || (isScalpMode ? dynamicMinSlMajor : 8));
     const configuredMinTpPips = isJpy
-      ? Number(process.env.FOREX_DYNAMIC_MIN_TP_JPY || (isScalpMode ? 3.5 : 10))
-      : Number(process.env.FOREX_DYNAMIC_MIN_TP_MAJOR || (isScalpMode ? 2.0 : 6));
+      ? Number(process.env.FOREX_DYNAMIC_MIN_TP_JPY || (isScalpMode ? 5.0 : 10))
+      : Number(process.env.FOREX_DYNAMIC_MIN_TP_MAJOR || (isScalpMode ? 3.5 : 6));
     const costBufferPips = isJpy
       ? FOREX_COST_BUFFER_PIPS_JPY
       : FOREX_COST_BUFFER_PIPS_MAJOR;
-    const costAwareMinTpPips = configuredMinTpPips
-      + costBufferPips
-      + FOREX_MIN_NET_TARGET_PIPS;
-    const minSlPips = dynamicExitEnabled ? configuredMinSlPips : (isScalpMode ? (isJpy ? 6 : 4) : (isJpy ? 24 : 14));
+    const costAwareMinTpPips = costBufferPips + FOREX_MIN_NET_TARGET_PIPS;
+    const minSlPips = dynamicExitEnabled ? configuredMinSlPips : (isScalpMode ? (isJpy ? dynamicMinSlJpy : dynamicMinSlMajor) : (isJpy ? 24 : 14));
     const minTpPips = Math.max(
       dynamicExitEnabled
         ? configuredMinTpPips
-        : (isScalpMode ? (isJpy ? 3.5 : 2.0) : (isJpy ? 38 : 22)),
+        : (isScalpMode ? (isJpy ? 5.0 : 3.5) : (isJpy ? 38 : 22)),
       costAwareMinTpPips
     );
     const rangeMinSlPips = isJpy
@@ -1697,13 +1995,8 @@ export async function executeForexScanCycle() {
       tpPips = dynamicExit.tpPips;
       slPips = dynamicExit.slPips;
       if (!dynamicExit.tradable) {
-        if (!DATA_HARVEST_LIVE_MODE) {
-          isSignal = false;
-        } else {
-          // Data Harvesting Fallback: enforce standard calibrated SL/TP geometry with safe spread buffer
-          tpPips = minTpPips;
-          slPips = minSlPips;
-        }
+        // Data harvesting must not bypass the structural TP/SL or minimum-R:R gate.
+        isSignal = false;
         reasons.push(`🚫 Dynamic Exit: ${dynamicExit.reason}`);
       }
       console.log(
@@ -1743,7 +2036,6 @@ export async function executeForexScanCycle() {
       slPrice = Number((entryPrice - slDist).toFixed(dec));
     }
 
-    const cleanName = symbol.replace('=X', '');
     const exitValidation = ['BUY', 'SELL'].includes(bias)
       ? validateForexExitGeometry({ action: bias, entryPrice, slPrice, tpPrice })
       : { valid: true, reason: null };
@@ -2244,7 +2536,7 @@ export async function executeForexScanCycle() {
         }
 
         // 4. Session Guard: Skip new entries during statistically toxic rollover/transition windows
-        if (!DATA_HARVEST_LIVE_MODE && process.env.FOREX_SESSION_GUARD_ENABLED !== 'false') {
+        if (process.env.FOREX_SESSION_GUARD_ENABLED !== 'false') {
           const sessionGuard = checkForexSessionGuard();
           if (sessionGuard.blocked) {
             console.log(`⏸️ [SESSION GUARD] ข้ามการยิงออเดอร์ ${cleanName}: ${sessionGuard.reason}`);
@@ -2629,6 +2921,15 @@ export async function executeForexScanCycle() {
     await labelForexMlObservations(pool, 250);
   } catch (err) {
     console.warn('⚠️ [Forex ML Dataset] label observations ไม่สำเร็จ:', err.message);
+  }
+
+  try {
+    const pLabelRes = await labelMarketPressureObservations(pool, 100);
+    if (pLabelRes.labeled > 0) {
+      console.log(`🏷️ [MarketPressureTracker] ติดป้าย Ground Truth สำเร็จ ${pLabelRes.labeled} แถว (คงเหลือรอดำเนินการ: ${pLabelRes.pending})`);
+    }
+  } catch (err) {
+    console.warn('⚠️ [Market Pressure Dataset] label observations ไม่สำเร็จ:', err.message);
   }
 
   return {

@@ -118,7 +118,7 @@ def retrain_from_live_results(target_version=None, dry_run=False):
                     raise ValueError(f'Missing retrain columns: {missing_cols}')
                 valid = raw_df[
                     (raw_df['market_type'] == 'forex') &
-                    (~raw_df['exit_reason'].isin(['OPEN', 'SYNC_PENDING'])) &
+                    (~raw_df['exit_reason'].isin(['OPEN', 'SYNC_PENDING', 'CLOSED_PRESSURE_EARLY_CUT', 'EXIT_CHALLENGER_EARLY_CUT'])) &
                     (raw_df['is_win'].notna()) &
                     (raw_df['action'].isin(['BUY', 'SELL'])) &
                     (raw_df['entry_time'].notna()) &

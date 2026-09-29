@@ -1,0 +1,337 @@
+{
+  "timeLimit": "12:32:00",
+  "liveOverall": [
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "period_label": "เมื่อวาน (24 ก.ย. - ก่อนเพิ่ม Market Pressure)",
+      "total_trades": 65,
+      "wins": "16",
+      "losses": "49",
+      "win_rate_pct": "24.6",
+      "net_pnl_usd": "-74.10",
+      "total_pips": "-1563.2",
+      "avg_pips_per_trade": "-24.05",
+      "avg_win_pips": "7.06",
+      "avg_loss_pips": "-34.21"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "period_label": "วันนี้ (25 ก.ย. - หลังเพิ่ม Market Pressure)",
+      "total_trades": 96,
+      "wins": "23",
+      "losses": "73",
+      "win_rate_pct": "24.0",
+      "net_pnl_usd": "-35.17",
+      "total_pips": "-483.7",
+      "avg_pips_per_trade": "-5.04",
+      "avg_win_pips": "12.98",
+      "avg_loss_pips": "-10.71"
+    }
+  ],
+  "marketBreakdown": [
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "market_type": "crypto",
+      "total_trades": 11,
+      "wins": "0",
+      "losses": "11",
+      "win_rate_pct": "0.0",
+      "net_pnl_usd": "-10.55",
+      "total_pips": "-965.2"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "market_type": "crypto",
+      "total_trades": 2,
+      "wins": "1",
+      "losses": "1",
+      "win_rate_pct": "50.0",
+      "net_pnl_usd": "-1.73",
+      "total_pips": "-176.9"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "market_type": "forex",
+      "total_trades": 42,
+      "wins": "12",
+      "losses": "30",
+      "win_rate_pct": "28.6",
+      "net_pnl_usd": "-12.33",
+      "total_pips": "-85.8"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "market_type": "forex",
+      "total_trades": 85,
+      "wins": "17",
+      "losses": "68",
+      "win_rate_pct": "20.0",
+      "net_pnl_usd": "-35.40",
+      "total_pips": "-326.4"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "market_type": "gold",
+      "total_trades": 12,
+      "wins": "4",
+      "losses": "8",
+      "win_rate_pct": "33.3",
+      "net_pnl_usd": "-51.22",
+      "total_pips": "-512.2"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "market_type": "gold",
+      "total_trades": 9,
+      "wins": "5",
+      "losses": "4",
+      "win_rate_pct": "55.6",
+      "net_pnl_usd": "1.96",
+      "total_pips": "19.6"
+    }
+  ],
+  "exitReasons": [
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "exit_reason": "CLOSED_TIME_STOP",
+      "count": 27,
+      "wins": "1",
+      "win_rate_pct": "3.7",
+      "pnl_usd": "-20.12",
+      "avg_pips": "-8.69"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "exit_reason": "CLOSED_SL",
+      "count": 27,
+      "wins": "5",
+      "win_rate_pct": "18.5",
+      "pnl_usd": "-51.28",
+      "avg_pips": "-48.88"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "exit_reason": "CLOSED_MICRO_SCALP",
+      "count": 4,
+      "wins": "3",
+      "win_rate_pct": "75.0",
+      "pnl_usd": "-5.54",
+      "avg_pips": "-12.95"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "exit_reason": "CLOSED_TP",
+      "count": 4,
+      "wins": "4",
+      "win_rate_pct": "100.0",
+      "pnl_usd": "2.46",
+      "avg_pips": "8.95"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "exit_reason": "CLOSED_STEPDOWN_PROFIT",
+      "count": 3,
+      "wins": "3",
+      "win_rate_pct": "100.0",
+      "pnl_usd": "0.38",
+      "avg_pips": "2.47"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_TIME_STOP",
+      "count": 43,
+      "wins": "4",
+      "win_rate_pct": "9.3",
+      "pnl_usd": "-18.77",
+      "avg_pips": "-3.71"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_SL",
+      "count": 28,
+      "wins": "1",
+      "win_rate_pct": "3.6",
+      "pnl_usd": "-26.17",
+      "avg_pips": "-16.34"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_PRESSURE_PROFIT_LOCK",
+      "count": 7,
+      "wins": "5",
+      "win_rate_pct": "71.4",
+      "pnl_usd": "1.07",
+      "avg_pips": "3.00"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_MICRO_SCALP",
+      "count": 7,
+      "wins": "7",
+      "win_rate_pct": "100.0",
+      "pnl_usd": "7.54",
+      "avg_pips": "12.16"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_TP",
+      "count": 3,
+      "wins": "3",
+      "win_rate_pct": "100.0",
+      "pnl_usd": "1.83",
+      "avg_pips": "9.57"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_PRESSURE_EARLY_CUT",
+      "count": 3,
+      "wins": "0",
+      "win_rate_pct": "0.0",
+      "pnl_usd": "-1.08",
+      "avg_pips": "-3.93"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_STEPDOWN_PROFIT",
+      "count": 3,
+      "wins": "3",
+      "win_rate_pct": "100.0",
+      "pnl_usd": "0.41",
+      "avg_pips": "3.50"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_HISTORICAL",
+      "count": 1,
+      "wins": "0",
+      "win_rate_pct": "0.0",
+      "pnl_usd": "0.00",
+      "avg_pips": "0.00"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "exit_reason": "CLOSED_EXPIRED",
+      "count": 1,
+      "wins": "0",
+      "win_rate_pct": "0.0",
+      "pnl_usd": "0.00",
+      "avg_pips": "0.00"
+    }
+  ],
+  "forexSpecific": [
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "total_trades": 42,
+      "wins": "12",
+      "losses": "30",
+      "win_rate_pct": "28.6",
+      "net_pnl_usd": "-12.33",
+      "total_pips": "-85.8",
+      "avg_pips": "-2.04",
+      "avg_loss_pips": "-4.82"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "total_trades": 85,
+      "wins": "17",
+      "losses": "68",
+      "win_rate_pct": "20.0",
+      "net_pnl_usd": "-35.40",
+      "total_pips": "-326.4",
+      "avg_pips": "-3.84",
+      "avg_loss_pips": "-6.05"
+    }
+  ],
+  "allModes": [
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "decision_mode": "LIVE",
+      "total_trades": 65,
+      "wins": "16",
+      "win_rate_pct": "24.6",
+      "net_pnl_usd": "-74.10",
+      "total_pips": "-1563.2"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "decision_mode": "POCKET_EXPLORE_SHADOW",
+      "total_trades": 58,
+      "wins": "12",
+      "win_rate_pct": "20.7",
+      "net_pnl_usd": "-13.83",
+      "total_pips": "-76.2"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "decision_mode": "POCKET_PROD_SHADOW",
+      "total_trades": 40,
+      "wins": "13",
+      "win_rate_pct": "32.5",
+      "net_pnl_usd": "-6.79",
+      "total_pips": "-10.1"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "decision_mode": "RANGE_SHADOW",
+      "total_trades": 32,
+      "wins": "14",
+      "win_rate_pct": "43.8",
+      "net_pnl_usd": "0.31",
+      "total_pips": "55.8"
+    },
+    {
+      "trade_date": "2026-09-23T17:00:00.000Z",
+      "decision_mode": "CHALLENGER_SHADOW",
+      "total_trades": 18,
+      "wins": "2",
+      "win_rate_pct": "11.1",
+      "net_pnl_usd": "-7.98",
+      "total_pips": "-99.7"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "decision_mode": "POCKET_EXPLORE_SHADOW",
+      "total_trades": 230,
+      "wins": "82",
+      "win_rate_pct": "35.7",
+      "net_pnl_usd": "-29.30",
+      "total_pips": "24.7"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "decision_mode": "LIVE",
+      "total_trades": 96,
+      "wins": "23",
+      "win_rate_pct": "24.0",
+      "net_pnl_usd": "-35.17",
+      "total_pips": "-483.7"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "decision_mode": "POCKET_PROD_SHADOW",
+      "total_trades": 92,
+      "wins": "24",
+      "win_rate_pct": "26.1",
+      "net_pnl_usd": "-18.56",
+      "total_pips": "-95.6"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "decision_mode": "RANGE_SHADOW",
+      "total_trades": 35,
+      "wins": "16",
+      "win_rate_pct": "45.7",
+      "net_pnl_usd": "-1.22",
+      "total_pips": "36.0"
+    },
+    {
+      "trade_date": "2026-09-24T17:00:00.000Z",
+      "decision_mode": "CHALLENGER_SHADOW",
+      "total_trades": 13,
+      "wins": "8",
+      "win_rate_pct": "61.5",
+      "net_pnl_usd": "-0.55",
+      "total_pips": "16.8"
+    }
+  ]
+}

@@ -1,7 +1,9 @@
 {
-  "model_id": "forex_market_pressure_v1.0.0",
-  "created_at": "2026-09-24T16:15:00+07:00",
-  "algorithm": "RandomForestClassifier(n_estimators=100, max_depth=7, class_weight='balanced')",
+  "active_version": "v1.1.0",
+  "model_id": "forex_market_pressure_v1.1.0",
+  "created_at": "2026-09-28T08:31:00+07:00",
+  "algorithm": "RandomForestClassifier(n_estimators=150, max_depth=9, min_samples_split=12, min_samples_leaf=8, class_weight='balanced_subsample')",
+  "artifact": "forex_market_pressure_v1.1.0.joblib",
   "feature_cols": [
     "bop",
     "body_ratio",
@@ -22,14 +24,10 @@
     "2": "SELL_PRESSURE"
   },
   "performance": {
-    "buy_safe_rate": 0.8307,
-    "sell_safe_rate": 0.8366
+    "live_sell_safe_rate": 0.7738,
+    "live_buy_safe_rate": 0.6975,
+    "live_high_conviction_safety": 0.8134,
+    "live_directional_win_rate": 0.5199
   },
-  "top_features": [
-    "vol_skew",
-    "bop",
-    "dir_disp_3",
-    "dir_disp_5",
-    "rel_range"
-  ]
+  "previous_version": "v1.0.0"
 }

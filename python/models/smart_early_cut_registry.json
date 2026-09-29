@@ -1,0 +1,36 @@
+{
+  "model_id": "smart_early_cut_v1.0.0",
+  "created_at": "2026-09-25T20:04:10.075253",
+  "feature_cols": [
+    "floating_pips",
+    "drawdown_to_atr",
+    "sl_room_ratio",
+    "tp_dist_ratio",
+    "adverse_body",
+    "rejection_wick",
+    "adverse_wick",
+    "wick_asym",
+    "rsi",
+    "atr_pips",
+    "bar_index"
+  ],
+  "decision_threshold": 0.8000000000000003,
+  "objective": "Distinguish Pullback Rebounds (HOLD) vs Fatal Collapses (CUT)",
+  "metrics": {
+    "roc_auc": 0.6696,
+    "precision": 0.9553,
+    "features_ranked": [
+      "sl_room_ratio",
+      "floating_pips",
+      "tp_dist_ratio",
+      "adverse_body",
+      "atr_pips",
+      "drawdown_to_atr",
+      "rsi",
+      "adverse_wick",
+      "rejection_wick",
+      "wick_asym",
+      "bar_index"
+    ]
+  }
+}

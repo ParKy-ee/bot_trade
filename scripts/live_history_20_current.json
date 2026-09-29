@@ -1,0 +1,360 @@
+{
+  "daily": [
+    {
+      "trade_date": "2026-09-20",
+      "market_type": "crypto",
+      "total_trades": 7,
+      "wins": "6",
+      "losses": "1",
+      "win_rate_pct": "85.7",
+      "pnl_usd": "9.22",
+      "total_pips": "891.9"
+    },
+    {
+      "trade_date": "2026-09-21",
+      "market_type": "crypto",
+      "total_trades": 43,
+      "wins": "23",
+      "losses": "20",
+      "win_rate_pct": "53.5",
+      "pnl_usd": "-19.98",
+      "total_pips": "-1691.8"
+    },
+    {
+      "trade_date": "2026-09-21",
+      "market_type": "forex",
+      "total_trades": 71,
+      "wins": "17",
+      "losses": "54",
+      "win_rate_pct": "23.9",
+      "pnl_usd": "-17.09",
+      "total_pips": "-227.6"
+    },
+    {
+      "trade_date": "2026-09-21",
+      "market_type": "gold",
+      "total_trades": 7,
+      "wins": "2",
+      "losses": "5",
+      "win_rate_pct": "28.6",
+      "pnl_usd": "-27.87",
+      "total_pips": "-278.7"
+    },
+    {
+      "trade_date": "2026-09-22",
+      "market_type": "crypto",
+      "total_trades": 9,
+      "wins": "5",
+      "losses": "4",
+      "win_rate_pct": "55.6",
+      "pnl_usd": "-5.43",
+      "total_pips": "-470.7"
+    },
+    {
+      "trade_date": "2026-09-22",
+      "market_type": "forex",
+      "total_trades": 173,
+      "wins": "80",
+      "losses": "93",
+      "win_rate_pct": "46.2",
+      "pnl_usd": "-31.41",
+      "total_pips": "-339.8"
+    },
+    {
+      "trade_date": "2026-09-23",
+      "market_type": "crypto",
+      "total_trades": 79,
+      "wins": "41",
+      "losses": "38",
+      "win_rate_pct": "51.9",
+      "pnl_usd": "-9.22",
+      "total_pips": "-842.0"
+    },
+    {
+      "trade_date": "2026-09-23",
+      "market_type": "forex",
+      "total_trades": 242,
+      "wins": "65",
+      "losses": "177",
+      "win_rate_pct": "26.9",
+      "pnl_usd": "-86.57",
+      "total_pips": "-938.9"
+    },
+    {
+      "trade_date": "2026-09-23",
+      "market_type": "gold",
+      "total_trades": 18,
+      "wins": "10",
+      "losses": "8",
+      "win_rate_pct": "55.6",
+      "pnl_usd": "11.08",
+      "total_pips": "110.8"
+    },
+    {
+      "trade_date": "2026-09-24",
+      "market_type": "crypto",
+      "total_trades": 12,
+      "wins": "1",
+      "losses": "11",
+      "win_rate_pct": "8.3",
+      "pnl_usd": "-6.02",
+      "total_pips": "-512.6"
+    },
+    {
+      "trade_date": "2026-09-24",
+      "market_type": "forex",
+      "total_trades": 90,
+      "wins": "32",
+      "losses": "58",
+      "win_rate_pct": "35.6",
+      "pnl_usd": "-22.34",
+      "total_pips": "-126.0"
+    },
+    {
+      "trade_date": "2026-09-24",
+      "market_type": "gold",
+      "total_trades": 24,
+      "wins": "13",
+      "losses": "11",
+      "win_rate_pct": "54.2",
+      "pnl_usd": "-27.06",
+      "total_pips": "-270.6"
+    },
+    {
+      "trade_date": "2026-09-25",
+      "market_type": "crypto",
+      "total_trades": 4,
+      "wins": "2",
+      "losses": "2",
+      "win_rate_pct": "50.0",
+      "pnl_usd": "-1.83",
+      "total_pips": "-181.8"
+    },
+    {
+      "trade_date": "2026-09-25",
+      "market_type": "forex",
+      "total_trades": 143,
+      "wins": "38",
+      "losses": "105",
+      "win_rate_pct": "26.6",
+      "pnl_usd": "-50.01",
+      "total_pips": "-463.9"
+    },
+    {
+      "trade_date": "2026-09-25",
+      "market_type": "gold",
+      "total_trades": 12,
+      "wins": "6",
+      "losses": "6",
+      "win_rate_pct": "50.0",
+      "pnl_usd": "-16.81",
+      "total_pips": "-168.1"
+    }
+  ],
+  "overallDaily": [
+    {
+      "trade_date": "2026-09-20",
+      "day_name": "Sunday",
+      "total_trades": 7,
+      "wins": "6",
+      "losses": "1",
+      "win_rate_pct": "85.7",
+      "pnl_usd": "9.22",
+      "total_pips": "891.9"
+    },
+    {
+      "trade_date": "2026-09-21",
+      "day_name": "Monday",
+      "total_trades": 121,
+      "wins": "42",
+      "losses": "79",
+      "win_rate_pct": "34.7",
+      "pnl_usd": "-64.94",
+      "total_pips": "-2198.1"
+    },
+    {
+      "trade_date": "2026-09-22",
+      "day_name": "Tuesday",
+      "total_trades": 182,
+      "wins": "85",
+      "losses": "97",
+      "win_rate_pct": "46.7",
+      "pnl_usd": "-36.84",
+      "total_pips": "-810.5"
+    },
+    {
+      "trade_date": "2026-09-23",
+      "day_name": "Wednesday",
+      "total_trades": 339,
+      "wins": "116",
+      "losses": "223",
+      "win_rate_pct": "34.2",
+      "pnl_usd": "-84.71",
+      "total_pips": "-1670.1"
+    },
+    {
+      "trade_date": "2026-09-24",
+      "day_name": "Thursday",
+      "total_trades": 126,
+      "wins": "46",
+      "losses": "80",
+      "win_rate_pct": "36.5",
+      "pnl_usd": "-55.42",
+      "total_pips": "-909.2"
+    },
+    {
+      "trade_date": "2026-09-25",
+      "day_name": "Friday",
+      "total_trades": 159,
+      "wins": "46",
+      "losses": "113",
+      "win_rate_pct": "28.9",
+      "pnl_usd": "-68.65",
+      "total_pips": "-813.8"
+    }
+  ],
+  "totalByMarket": [
+    {
+      "market_type": "forex",
+      "total_trades": 719,
+      "wins": "232",
+      "losses": "487",
+      "win_rate_pct": "32.3",
+      "pnl_usd": "-207.42",
+      "total_pips": "-2096.2"
+    },
+    {
+      "market_type": "crypto",
+      "total_trades": 154,
+      "wins": "78",
+      "losses": "76",
+      "win_rate_pct": "50.6",
+      "pnl_usd": "-33.26",
+      "total_pips": "-2807.1"
+    },
+    {
+      "market_type": "gold",
+      "total_trades": 61,
+      "wins": "31",
+      "losses": "30",
+      "win_rate_pct": "50.8",
+      "pnl_usd": "-60.66",
+      "total_pips": "-606.6"
+    }
+  ],
+  "grandTotal": [
+    {
+      "total_trades": 934,
+      "wins": "341",
+      "losses": "593",
+      "win_rate_pct": "36.5",
+      "pnl_usd": "-301.34",
+      "total_pips": "-5509.9"
+    }
+  ],
+  "exitReasons": [
+    {
+      "exit_reason": "CLOSED_SL",
+      "count": 437,
+      "wins": "70",
+      "win_rate_pct": "16.0",
+      "pnl_usd": "-381.43"
+    },
+    {
+      "exit_reason": "CLOSED_TIME_STOP",
+      "count": 208,
+      "wins": "25",
+      "win_rate_pct": "12.0",
+      "pnl_usd": "-122.43"
+    },
+    {
+      "exit_reason": "CLOSED_MICRO_SCALP",
+      "count": 112,
+      "wins": "111",
+      "win_rate_pct": "99.1",
+      "pnl_usd": "122.92"
+    },
+    {
+      "exit_reason": "CLOSED_TP",
+      "count": 71,
+      "wins": "71",
+      "win_rate_pct": "100.0",
+      "pnl_usd": "79.17"
+    },
+    {
+      "exit_reason": "CLOSED_STEPDOWN_PROFIT",
+      "count": 50,
+      "wins": "48",
+      "win_rate_pct": "96.0",
+      "pnl_usd": "6.13"
+    },
+    {
+      "exit_reason": "CLOSED_MT5",
+      "count": 16,
+      "wins": "7",
+      "win_rate_pct": "43.8",
+      "pnl_usd": "0.61"
+    },
+    {
+      "exit_reason": "CLOSED_EXPIRED",
+      "count": 14,
+      "wins": "0",
+      "win_rate_pct": "0.0",
+      "pnl_usd": "0.00"
+    },
+    {
+      "exit_reason": "CLOSED_AI_TREND_EXIT",
+      "count": 10,
+      "wins": "3",
+      "win_rate_pct": "30.0",
+      "pnl_usd": "-4.72"
+    },
+    {
+      "exit_reason": "CLOSED_PRESSURE_PROFIT_LOCK",
+      "count": 9,
+      "wins": "6",
+      "win_rate_pct": "66.7",
+      "pnl_usd": "1.11"
+    },
+    {
+      "exit_reason": "CLOSED_PRESSURE_EARLY_CUT",
+      "count": 6,
+      "wins": "0",
+      "win_rate_pct": "0.0",
+      "pnl_usd": "-2.70"
+    },
+    {
+      "exit_reason": "CLOSED_HISTORICAL",
+      "count": 1,
+      "wins": "0",
+      "win_rate_pct": "0.0",
+      "pnl_usd": "0.00"
+    }
+  ],
+  "cryptoSymbols": [
+    {
+      "symbol": "BTCUSD",
+      "total_trades": 60,
+      "wins": "36",
+      "losses": "24",
+      "win_rate_pct": "60.0",
+      "pnl_usd": "-28.56"
+    },
+    {
+      "symbol": "ETHUSD",
+      "total_trades": 58,
+      "wins": "34",
+      "losses": "24",
+      "win_rate_pct": "58.6",
+      "pnl_usd": "0.65"
+    },
+    {
+      "symbol": "SOLUSD",
+      "total_trades": 36,
+      "wins": "8",
+      "losses": "28",
+      "win_rate_pct": "22.2",
+      "pnl_usd": "-5.35"
+    }
+  ]
+}

@@ -98,5 +98,28 @@
       "high_conf_precision": 0.0
     },
     "trained_at": "2026-09-22T19:54:16.282495"
+  },
+  {
+    "model_version": "gold-v1.1.0",
+    "model_file": "gold_m5_model.joblib",
+    "market": "gold",
+    "symbol": "XAUUSD",
+    "timeframe": "M5",
+    "features": [
+      "ret_1",
+      "ret_5",
+      "rsi_14",
+      "atr_pct",
+      "adx_14",
+      "ema_spread_21_50",
+      "bb_width",
+      "asian_sweep",
+      "session_num",
+      "dxy_slope_5",
+      "h1_trend_slope",
+      "fvg_bull_bear"
+    ],
+    "trained_at": "2026-09-28T12:12:48.990262",
+    "description": "Enhanced Calibrated LightGBM with balanced weights and RobustScaler"
   }
 ]

@@ -19,6 +19,59 @@ function getBangkokDateTimeStr(d = new Date()) {
   }).format(d).replace('T', ' ');
 }
 
+function toFiniteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function aggregatePositionDeals(deals, ticket) {
+  if (!Array.isArray(deals)) return null;
+
+  const matchingDeals = deals
+    .filter(deal => Number(deal?.position) === Number(ticket))
+    .sort((a, b) => {
+      const timeA = new Date(a?.time || 0).getTime() || 0;
+      const timeB = new Date(b?.time || 0).getTime() || 0;
+      return timeA - timeB || Number(a?.deal || 0) - Number(b?.deal || 0);
+    });
+
+  if (matchingDeals.length === 0) return null;
+
+  const totalVolume = matchingDeals.reduce((sum, deal) => sum + Math.max(0, toFiniteNumber(deal.volume)), 0);
+  const weightedPrice = totalVolume > 0
+    ? matchingDeals.reduce((sum, deal) => sum + toFiniteNumber(deal.price) * Math.max(0, toFiniteNumber(deal.volume)), 0) / totalVolume
+    : toFiniteNumber(matchingDeals.at(-1).price);
+  const profit = matchingDeals.reduce((sum, deal) => sum + toFiniteNumber(deal.profit), 0);
+  const swap = matchingDeals.reduce((sum, deal) => sum + toFiniteNumber(deal.swap), 0);
+  const commission = matchingDeals.reduce((sum, deal) => sum + toFiniteNumber(deal.commission), 0);
+  const fee = matchingDeals.reduce((sum, deal) => sum + toFiniteNumber(deal.fee), 0);
+  const latest = matchingDeals.at(-1);
+
+  return {
+    ...latest,
+    price: weightedPrice,
+    volume: totalVolume,
+    profit,
+    swap,
+    commission,
+    fee,
+    netProfit: matchingDeals.reduce((sum, deal) => {
+      const componentNet = toFiniteNumber(deal.profit)
+        + toFiniteNumber(deal.swap)
+        + toFiniteNumber(deal.commission)
+        + toFiniteNumber(deal.fee);
+      const netProfit = deal.netProfit === null || deal.netProfit === undefined
+        ? componentNet
+        : toFiniteNumber(deal.netProfit, componentNet);
+      return sum + netProfit;
+    }, 0)
+  };
+}
+
+const GENERIC_MT5_EXIT_REASONS = new Set([
+  'CLOSED_EXPIRED', 'CLOSED_HISTORICAL', 'CLOSED_MANUAL', 'CLOSED_MT5'
+]);
+
 export async function recordTradeEntry({
   ticket = null,
   symbol,
@@ -136,6 +189,8 @@ export async function recordTradeExit({
   swap = null,
   fee = null,
   allowPlaceholderCorrection = false,
+  allowBrokerReconciliation = false,
+  exitTime = null,
   tradeResultId = null
 }) {
   try {
@@ -143,8 +198,44 @@ export async function recordTradeExit({
     const now = new Date();
     const nowStr = getBangkokDateTimeStr(now);
 
-    // Find the open record by ticket or symbol
-    let sql = allowPlaceholderCorrection
+    // Ticketed results are broker trades. Never finalize one with a locally
+    // sampled quote: wait for the position to disappear and its closing deal
+    // to appear in MT5 history, then use the broker's fill and net P&L.
+    if (Number(ticket) > 0 && (realProfit === null || realProfit === undefined)) {
+      const { getOpenPositions, getClosedDeals } = await import('./mt5Broker.js');
+      const [openPositions, closedDeals] = await Promise.all([
+        getOpenPositions(),
+        getClosedDeals()
+      ]);
+
+      if (!Array.isArray(openPositions)) {
+        console.warn(`[Trade Tracker] Waiting for MT5 position state before closing ticket #${ticket}`);
+        return false;
+      }
+      if (openPositions.some(position => Number(position.ticket) === Number(ticket))) {
+        console.warn(`[Trade Tracker] MT5 ticket #${ticket} is still open; leaving result OPEN`);
+        return false;
+      }
+
+      const brokerDeal = aggregatePositionDeals(closedDeals, ticket);
+      if (!brokerDeal) {
+        console.warn(`[Trade Tracker] No MT5 closing deal yet for ticket #${ticket}; leaving result OPEN`);
+        return false;
+      }
+
+      exitPrice = brokerDeal.price;
+      realProfit = brokerDeal.netProfit;
+      grossProfit = brokerDeal.profit;
+      commission = brokerDeal.commission;
+      swap = brokerDeal.swap;
+      fee = brokerDeal.fee;
+      exitTime = brokerDeal.time || exitTime;
+    }
+
+    // Find the matching trade record by ticket or symbol.
+    let sql = allowBrokerReconciliation
+      ? `SELECT * FROM trade_results WHERE 1 = 1`
+      : allowPlaceholderCorrection
       ? `SELECT * FROM trade_results
           WHERE (exit_reason = 'OPEN'
              OR exit_reason = 'CLOSED_EXPIRED'
@@ -249,13 +340,22 @@ export async function recordTradeExit({
 
     // Duration in minutes (Normalized against timezone skew)
     let durationMin = 1;
+    const parsedExitTime = exitTime
+      ? new Date(String(exitTime).replace(' ', 'T'))
+      : now;
+    const exitTimeStr = exitTime
+      ? String(exitTime).replace('T', ' ').slice(0, 19)
+      : nowStr;
     if (trade.entry_time) {
       const entryMs = new Date(trade.entry_time).getTime();
-      const exitMs = now.getTime();
+      const exitMs = Number.isFinite(parsedExitTime.getTime()) ? parsedExitTime.getTime() : now.getTime();
       let diffMs = exitMs - entryMs;
       // If legacy entry_time had UTC discrepancy (+7h / ~25,200,000ms), normalize
       if (diffMs > 24000000 && diffMs < 26500000) {
         diffMs -= 7 * 60 * 60 * 1000;
+      } else if (diffMs > 6800000 && diffMs < 18000000) {
+        // Normalize broker deal.time timezone discrepancy (EET/Cyprus UTC+2/3, ~180m / ~10.8M ms)
+        diffMs -= 3 * 60 * 60 * 1000;
       }
       durationMin = Math.max(1, Math.round(Math.abs(diffMs) / (1000 * 60)));
     }
@@ -278,7 +378,7 @@ export async function recordTradeExit({
            hold_duration_minutes = ?
        WHERE id = ?`,
       [
-        nowStr,
+        exitTimeStr,
         currExitPrice,
         exitReason,
         pips,
@@ -347,6 +447,9 @@ export async function getTradeResults(limit = 100, market = null, options = {}) 
   return rows;
 }
 
+let mt5SyncInFlight = false;
+let mt5SyncRetryAfter = 0;
+
 export async function getTradeStats(market = null) {
   const pool = await getPool();
   let whereClause = '';
@@ -399,11 +502,16 @@ export async function getTradeStats(market = null) {
  */
 export async function syncMt5PositionsWithDatabase() {
   if (process.env.MT5_ENABLED !== 'true') return;
+  if (mt5SyncInFlight || Date.now() < mt5SyncRetryAfter) return;
 
+  mt5SyncInFlight = true;
   try {
     const { getOpenPositions, getClosedDeals, getPendingOrders } = await import('./mt5Broker.js');
     const openRes = await getOpenPositions();
-    if (!Array.isArray(openRes)) return; // MT5 not connected or error
+    if (!Array.isArray(openRes)) {
+      if (openRes?.error || openRes?.connected === false) mt5SyncRetryAfter = Date.now() + 5000;
+      return;
+    }
 
     const positionKey = (symbol, ticket) => `${String(symbol)}:${Number(ticket)}`;
     const openTickets = new Set(openRes.map(p => Number(p.ticket)));
@@ -417,11 +525,21 @@ export async function syncMt5PositionsWithDatabase() {
 
     const closedDealsRes = await getClosedDeals();
     const closedDealsMap = new Map();
+    const dealsByPosition = new Map();
     if (Array.isArray(closedDealsRes)) {
-      for (const d of closedDealsRes) {
-        if (d.position) {
-          closedDealsMap.set(Number(d.position), d);
-          closedDealsMap.set(positionKey(d.symbol, d.position), d);
+      for (const deal of closedDealsRes) {
+        if (!deal.position) continue;
+        const key = positionKey(deal.symbol, deal.position);
+        const grouped = dealsByPosition.get(key) || [];
+        grouped.push(deal);
+        dealsByPosition.set(key, grouped);
+      }
+      for (const [key, deals] of dealsByPosition) {
+        const [symbol, ticket] = key.split(':');
+        const aggregate = aggregatePositionDeals(deals, ticket);
+        if (aggregate) {
+          closedDealsMap.set(Number(ticket), aggregate);
+          closedDealsMap.set(key, aggregate);
         }
       }
     }
@@ -439,23 +557,26 @@ export async function syncMt5PositionsWithDatabase() {
     const [dbPositions] = await pool.query(
       `SELECT tr.id AS trade_result_id,
               tr.symbol, tr.market_type, tr.mt5_ticket, tr.entry_price,
-              tr.entry_time,
-              tr.exit_reason AS result_exit_reason,
-              tr.exit_price AS result_exit_price,
-              tr.profit_loss AS result_profit_loss,
+               tr.entry_time,
+               tr.exit_reason AS result_exit_reason,
+               tr.exit_price AS result_exit_price,
+               tr.profit_loss AS result_profit_loss,
+               tr.is_win AS result_is_win,
+               tr.gross_profit AS result_gross_profit,
+               tr.commission_cost AS result_commission_cost,
+               tr.swap_cost AS result_swap_cost,
+               tr.fee_cost AS result_fee_cost,
                COALESCE(ap.status_note, 'OPEN') AS status_note,
+               ap.status_note AS active_status_note,
                ap.entry_date AS active_entry_date
        FROM trade_results tr
        LEFT JOIN active_positions ap
          ON ap.mt5_ticket = tr.mt5_ticket
         AND ap.symbol = tr.symbol
         AND ap.market_type = tr.market_type
-       WHERE tr.mt5_ticket IS NOT NULL
+        WHERE tr.mt5_ticket IS NOT NULL
           AND (tr.exit_reason = 'OPEN'
-               OR tr.exit_reason = 'CLOSED_EXPIRED'
-              OR (tr.exit_reason = 'CLOSED_MANUAL'
-                  AND COALESCE(tr.exit_price, tr.entry_price) = tr.entry_price
-                  AND COALESCE(tr.profit_loss, 0) = 0))`
+               OR tr.entry_time >= DATE_SUB(NOW(), INTERVAL 8 DAY))`
     );
 
     for (const pos of dbPositions) {
@@ -465,6 +586,13 @@ export async function syncMt5PositionsWithDatabase() {
       const isOpenInMt5 = openTickets.has(ticket) || openKeys.has(tradeKey);
       const isPendingInMt5 = pendingTickets.has(ticket);
       const isExpiredCandidate = pos.result_exit_reason === 'CLOSED_EXPIRED';
+      const requestedCloseReason = statusNote.startsWith('CLOSED_')
+        ? statusNote
+        : (statusNote.match(/^SYNC_PENDING_(CLOSED_.+)$/)?.[1] || null);
+      const pendingExitReason = requestedCloseReason && !GENERIC_MT5_EXIT_REASONS.has(requestedCloseReason)
+        ? requestedCloseReason
+        : null;
+      const deal = closedDealsMap.get(ticket) || closedDealsMap.get(tradeKey);
 
       // If still waiting as an active pending limit/stop order on MT5, keep it untouched
       if (isPendingInMt5) {
@@ -474,11 +602,79 @@ export async function syncMt5PositionsWithDatabase() {
       const hasPlaceholderExit = pos.result_exit_reason === 'CLOSED_MANUAL'
         && Number(pos.result_exit_price) === Number(pos.entry_price)
         && Number(pos.result_profit_loss || 0) === 0;
+      const hasFinalizedResult = pos.result_exit_reason !== 'OPEN'
+        && !isExpiredCandidate
+        && !hasPlaceholderExit;
 
-      if (!isOpenInMt5 && (!statusNote.startsWith('CLOSED') || hasPlaceholderExit || isExpiredCandidate)) {
+      if (!isOpenInMt5 && hasFinalizedResult && !deal) {
+        // MT5 only returns a rolling history window. Keep an already-finalized
+        // row untouched when its broker deal has aged out of that window.
+        continue;
+      }
+
+      if (!isOpenInMt5 && deal && pos.result_exit_reason !== 'OPEN'
+        && !isExpiredCandidate && !hasPlaceholderExit) {
+        const dealComment = String(deal.comment || '').toLowerCase();
+        const reasonFromDeal = dealComment.includes('[sl')
+          ? 'CLOSED_SL'
+          : (dealComment.includes('[tp') ? 'CLOSED_TP' : 'CLOSED_MT5');
+        const existingReason = pendingExitReason || pos.result_exit_reason;
+        const correctedReason = existingReason?.startsWith('CLOSED_')
+          && !GENERIC_MT5_EXIT_REASONS.has(existingReason)
+          ? existingReason
+          : reasonFromDeal;
+        const pnlMismatch = pos.result_profit_loss === null || pos.result_profit_loss === undefined
+          || Math.abs(toFiniteNumber(pos.result_profit_loss) - toFiniteNumber(deal.netProfit)) > 0.005;
+        const priceMismatch = pos.result_exit_price === null || pos.result_exit_price === undefined
+          || Math.abs(toFiniteNumber(pos.result_exit_price) - toFiniteNumber(deal.price)) > 0.000005;
+        const winMismatch = pos.result_is_win === null || pos.result_is_win === undefined
+          || Number(pos.result_is_win) !== (toFiniteNumber(deal.netProfit) > 0 ? 1 : 0);
+        const costMismatch = [
+          [pos.result_gross_profit, deal.profit],
+          [pos.result_commission_cost, deal.commission],
+          [pos.result_swap_cost, deal.swap],
+          [pos.result_fee_cost, deal.fee]
+        ].some(([stored, actual]) => actual !== null && actual !== undefined
+          && (stored === null || stored === undefined
+            || Math.abs(toFiniteNumber(stored) - toFiniteNumber(actual)) > 0.005));
+        const reasonMismatch = pos.result_exit_reason !== correctedReason;
+        const activeStatusMismatch = Boolean(pos.active_status_note && !pos.active_status_note.startsWith('CLOSED'));
+
+        if (pnlMismatch || priceMismatch || winMismatch || costMismatch || reasonMismatch) {
+          console.log(`🔄 [MT5 Reconcile] Correcting finalized ticket #${ticket} (${pos.symbol}) from broker closing deals`);
+          await recordTradeExit({
+            ticket,
+            symbol: pos.symbol,
+            exitPrice: deal.price,
+            exitReason: correctedReason,
+            realProfit: deal.netProfit,
+            grossProfit: deal.profit,
+            commission: deal.commission,
+            swap: deal.swap,
+            fee: deal.fee,
+            exitTime: deal.time,
+            allowBrokerReconciliation: true
+          });
+          if (pos.active_status_note) {
+            await pool.query(
+              `UPDATE active_positions SET status_note = ?
+               WHERE mt5_ticket = ? AND symbol = ? AND market_type = ?`,
+              [correctedReason, ticket, pos.symbol, pos.market_type]
+            );
+          }
+        } else if (activeStatusMismatch) {
+          await pool.query(
+            `UPDATE active_positions SET status_note = ?
+             WHERE mt5_ticket = ? AND symbol = ? AND market_type = ?`,
+            [correctedReason, ticket, pos.symbol, pos.market_type]
+          );
+        }
+        continue;
+      }
+
+      if (!isOpenInMt5 && (pos.result_exit_reason === 'OPEN' || !statusNote.startsWith('CLOSED') || hasPlaceholderExit || isExpiredCandidate)) {
         // The position has closed on MT5!
-        const deal = closedDealsMap.get(ticket) || closedDealsMap.get(tradeKey);
-        let exitReason = 'CLOSED_MANUAL';
+        let exitReason = pendingExitReason || 'CLOSED_MANUAL';
         let exitPrice = Number(pos.entry_price);
         let realProfit = null;
 
@@ -486,7 +682,9 @@ export async function syncMt5PositionsWithDatabase() {
           exitPrice = Number(deal.price);
           realProfit = Number(deal.netProfit ?? deal.profit);
           const c = String(deal.comment || '').toLowerCase();
-          if (c.includes('[sl')) {
+          if (pendingExitReason) {
+            exitReason = pendingExitReason;
+          } else if (c.includes('[sl')) {
             exitReason = 'CLOSED_SL';
           } else if (c.includes('[tp')) {
             exitReason = 'CLOSED_TP';
@@ -502,6 +700,18 @@ export async function syncMt5PositionsWithDatabase() {
         }
 
         if (!deal) {
+          if (requestedCloseReason) {
+            const pendingStatus = `SYNC_PENDING_${requestedCloseReason}`;
+            if (statusNote !== pendingStatus) {
+              await pool.query(
+                `UPDATE active_positions SET status_note = ?
+                 WHERE mt5_ticket = ? AND symbol = ? AND market_type = ?`,
+                [pendingStatus, ticket, pos.symbol, pos.market_type]
+              );
+            }
+            continue;
+          }
+
           const isPendingStatus = statusNote.includes('PENDING') && !statusNote.startsWith('SYNC_PENDING');
           const entryTime = new Date(pos.active_entry_date || pos.entry_time || 0).getTime();
           const ageSeconds = Number.isFinite(entryTime)
@@ -560,9 +770,10 @@ export async function syncMt5PositionsWithDatabase() {
           commission: deal ? deal.commission : null,
           swap: deal ? deal.swap : null,
           fee: deal ? deal.fee : null,
+          exitTime: deal ? deal.time : null,
           allowPlaceholderCorrection: true
         });
-      } else if (isOpenInMt5 && statusNote.startsWith('CLOSED')) {
+      } else if (isOpenInMt5 && (statusNote.startsWith('CLOSED') || requestedCloseReason || pos.result_exit_reason !== 'OPEN' || statusNote.includes('PENDING'))) {
         // Position is STILL OPEN in MT5! Restore active status
         const mt5Pos = openPositionsMap.get(ticket) || openPositionsMap.get(tradeKey);
         const actionType = mt5Pos?.type || 'BUY';
@@ -586,6 +797,13 @@ export async function syncMt5PositionsWithDatabase() {
       }
     }
   } catch (err) {
-    console.warn('⚠️ syncMt5PositionsWithDatabase warning:', err.message);
+    if (['EPERM', 'EACCES', 'ENOENT'].includes(err?.code)) {
+      mt5SyncRetryAfter = Date.now() + 15000;
+      console.warn(`⚠️ syncMt5PositionsWithDatabase unavailable (${err.code}); retrying in 15s`);
+    } else {
+      console.warn('⚠️ syncMt5PositionsWithDatabase warning:', err.message);
+    }
+  } finally {
+    mt5SyncInFlight = false;
   }
 }

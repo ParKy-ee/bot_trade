@@ -16,7 +16,7 @@ function runBridge(args, stdinPayload = null) {
   return new Promise((resolve, reject) => {
     const child = spawn(PYTHON_PATH, [BRIDGE_SCRIPT, ...args], {
       cwd: ROOT_DIR,
-      windowsHide: true
+      windowsHide: false
     });
 
     let stdout = '';

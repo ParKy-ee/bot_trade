@@ -70,12 +70,16 @@ def main():
             rows.append(row)
 
         df = pd.DataFrame(rows)
-        X = df[feature_cols].values
-        if scaler is not None:
-            X = scaler.transform(X)
+        X_raw = df[feature_cols].values
+        
+        buy_scaler = bundle.get("buy_scaler") if bundle.get("buy_scaler") is not None else scaler
+        sell_scaler = bundle.get("sell_scaler") if bundle.get("sell_scaler") is not None else scaler
 
-        prob_buys = buy_model.predict_proba(X)[:, 1] if buy_model is not None else np.full(len(X), 0.5)
-        prob_sells = sell_model.predict_proba(X)[:, 1] if sell_model is not None else np.full(len(X), 0.5)
+        X_buy = buy_scaler.transform(X_raw) if buy_scaler is not None else X_raw
+        X_sell = sell_scaler.transform(X_raw) if sell_scaler is not None else X_raw
+
+        prob_buys = buy_model.predict_proba(X_buy)[:, 1] if buy_model is not None else np.full(len(X_raw), 0.5)
+        prob_sells = sell_model.predict_proba(X_sell)[:, 1] if sell_model is not None else np.full(len(X_raw), 0.5)
 
         results = []
         for i in range(len(records)):

@@ -180,7 +180,7 @@ def train_crypto_model():
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(VERSIONS_DIR, exist_ok=True)
 
-    version_str = "v2.0.0"
+    version_str = "v2.1.0"
     bundle = {
         "version": version_str,
         "market": "crypto",
@@ -211,7 +211,7 @@ def train_crypto_model():
     registry_entry = {
         "version": version_str,
         "created_at": pd.Timestamp.now().isoformat(),
-        "description": "Upgraded Crypto M5 Calibrated Tri-Ensemble with 16 Microstructure & BTC Cross-Correlation Features",
+        "description": "Retrained Crypto M5 Calibrated Tri-Ensemble with fresh Binance BTC, ETH, and SOL data",
         "file": version_file,
         "dataset": {
             "source": "Binance Public REST API (Klines M5 - BTC, ETH, SOL)",

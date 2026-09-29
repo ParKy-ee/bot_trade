@@ -13,7 +13,19 @@ import numpy as np
 warnings.filterwarnings('ignore')
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(ROOT_DIR, 'python', 'models', 'forex_market_pressure_v1.0.0.joblib')
+_MODEL_VERSION = os.environ.get('FOREX_MARKET_PRESSURE_MODEL_VERSION', 'v1.1.0')
+if not _MODEL_VERSION.endswith('.joblib'):
+    if not _MODEL_VERSION.startswith('forex_market_pressure_'):
+        _MODEL_FILE = f"forex_market_pressure_{_MODEL_VERSION}.joblib"
+    else:
+        _MODEL_FILE = f"{_MODEL_VERSION}.joblib"
+else:
+    _MODEL_FILE = _MODEL_VERSION
+
+MODEL_PATH = os.path.join(ROOT_DIR, 'python', 'models', _MODEL_FILE)
+# Fallback to v1.0.0 if chosen version not found
+if not os.path.exists(MODEL_PATH):
+    MODEL_PATH = os.path.join(ROOT_DIR, 'python', 'models', 'forex_market_pressure_v1.0.0.joblib')
 
 _cached_model = None
 
@@ -36,8 +48,7 @@ def extract_features(bars):
     opens = np.array([float(b['open']) for b in bars])
     highs = np.array([float(b['high']) for b in bars])
     lows = np.array([float(b['low']) for b in bars])
-    vols = np.array([float(b.get('volume', 1)) for b in bars])
-    atrs = np.array([float(b.get('atr', 0.0010)) for b in bars])
+    vols = np.array([float(b.get('volume', 1) or 1) for b in bars])
 
     # Current bar is the last bar
     idx = -1
@@ -45,9 +56,25 @@ def extract_features(bars):
     c_open = opens[idx]
     c_high = highs[idx]
     c_low = lows[idx]
-    c_atr = max(atrs[idx], 1e-5)
     c_range = max(c_high - c_low, 1e-5)
     c_body = abs(c_close - c_open)
+
+    # Dynamically calculate true ATR(14) from OHLC sequence
+    if len(bars) >= 2:
+        tr1 = highs[1:] - lows[1:]
+        tr2 = np.abs(highs[1:] - closes[:-1])
+        tr3 = np.abs(lows[1:] - closes[:-1])
+        tr = np.maximum(tr1, np.maximum(tr2, tr3))
+        window = min(len(tr), 14)
+        c_atr = float(np.mean(tr[-window:])) if window > 0 else float(c_range)
+    else:
+        c_atr = float(c_range)
+
+    # Use explicit ATR if supplied and valid
+    explicit_atr = bars[-1].get('atr')
+    if explicit_atr is not None and float(explicit_atr) > 0:
+        c_atr = float(explicit_atr)
+    c_atr = max(c_atr, 1e-5)
 
     # 1. Bar Anatomy
     bop = float(np.clip((c_close - c_open) / c_range, -1.0, 1.0))
@@ -90,10 +117,19 @@ def extract_features(bars):
     ]
 
     metrics = {
-        "bop": round(bop, 3),
-        "ker_5": round(ker_5, 3),
-        "wick_asymmetry": round(wick_asym, 3),
-        "rel_range": round(rel_range, 2),
+        "bop": round(bop, 4),
+        "body_ratio": round(body_ratio, 4),
+        "upper_wick": round(upper_wick, 4),
+        "lower_wick": round(lower_wick, 4),
+        "wick_asym": round(wick_asym, 4),
+        "wick_asymmetry": round(wick_asym, 4),
+        "rel_range": round(rel_range, 4),
+        "ker_3": round(ker_3, 4),
+        "ker_5": round(ker_5, 4),
+        "ker_10": round(ker_10, 4),
+        "dir_disp_3": round(dir_disp_3, 4),
+        "dir_disp_5": round(dir_disp_5, 4),
+        "vol_skew": round(vol_skew, 4),
         "atr": c_atr,
         "close": c_close
     }
@@ -111,9 +147,10 @@ def predict(bars, symbol="EURUSD=X"):
     p_buy = float(probs[1])
     p_sell = float(probs[2])
 
-    if p_buy >= 0.42 and p_buy > p_sell:
+    threshold = float(os.environ.get("MARKET_PRESSURE_STATE_THRESHOLD", 0.36))
+    if (p_buy >= 0.42 and p_buy > p_sell) or (p_buy >= threshold and p_buy > p_sell * 1.10 and p_buy >= p_indecision * 0.85):
         state = "BUY_PRESSURE"
-    elif p_sell >= 0.42 and p_sell > p_buy:
+    elif (p_sell >= 0.42 and p_sell > p_buy) or (p_sell >= threshold and p_sell > p_buy * 1.10 and p_sell >= p_indecision * 0.85):
         state = "SELL_PRESSURE"
     else:
         state = "INDECISION_CHOP"
@@ -144,6 +181,27 @@ def predict(bars, symbol="EURUSD=X"):
     sl_target_pips = round(rec_sl_mult * atr_pips, 1)
     rr_ratio = round(rec_tp_mult / rec_sl_mult, 2)
 
+    # 3. REVERSAL ORDER FLOW ABSORPTION & CONFIRMATION
+    # Bullish Reversal Flow: Strong lower wick absorption + p_buy >= 0.33 + p_buy > p_sell
+    bullish_reversal_flow = (
+        (metrics['wick_asym'] >= 0.20 or metrics['lower_wick'] >= 0.40) and
+        (p_buy >= 0.33 and p_buy > p_sell * 1.05) and
+        (metrics['dir_disp_3'] <= 0.80 or metrics['bop'] >= -0.20)
+    )
+
+    # Bearish Reversal Flow: Strong upper wick absorption + p_sell >= 0.33 + p_sell > p_buy
+    bearish_reversal_flow = (
+        (metrics['wick_asym'] <= -0.20 or metrics['upper_wick'] >= 0.40) and
+        (p_sell >= 0.33 and p_sell > p_buy * 1.05) and
+        (metrics['dir_disp_3'] >= -0.80 or metrics['bop'] <= 0.20)
+    )
+
+    reversal_flow_state = "NONE"
+    if bullish_reversal_flow and not bearish_reversal_flow:
+        reversal_flow_state = "BULLISH_REVERSAL_FLOW"
+    elif bearish_reversal_flow and not bullish_reversal_flow:
+        reversal_flow_state = "BEARISH_REVERSAL_FLOW"
+
     return {
         "state": state,
         "raw_predicted_class": pred_class,
@@ -151,6 +209,14 @@ def predict(bars, symbol="EURUSD=X"):
             "indecision": round(p_indecision, 4),
             "buy_pressure": round(p_buy, 4),
             "sell_pressure": round(p_sell, 4)
+        },
+        "reversal_confirmation": {
+            "reversal_flow_state": reversal_flow_state,
+            "bullish_flow_confirmed": bool(bullish_reversal_flow),
+            "bearish_flow_confirmed": bool(bearish_reversal_flow),
+            "absorption_wick": round(float(metrics['wick_asym']), 4),
+            "vol_skew": round(float(metrics['vol_skew']), 4),
+            "supporting_pressure": round(float(p_buy if bullish_reversal_flow else (p_sell if bearish_reversal_flow else 0.0)), 4)
         },
         "pip_projections": {
             "atr_pips": round(atr_pips, 1),
@@ -161,12 +227,7 @@ def predict(bars, symbol="EURUSD=X"):
             "dynamic_sl_pips": sl_target_pips,
             "projected_rr_ratio": rr_ratio
         },
-        "metrics": {
-            "bop": metrics['bop'],
-            "ker_5": metrics['ker_5'],
-            "wick_asymmetry": metrics['wick_asymmetry'],
-            "rel_range": metrics['rel_range']
-        }
+        "metrics": metrics
     }
 
 if __name__ == '__main__':

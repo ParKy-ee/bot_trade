@@ -1,4 +1,6 @@
 import { EMA, RSI, MACD, BollingerBands, ATR, ADX, Stochastic } from 'technicalindicators';
+import { checkComprehensiveReversal } from './forexPriceAction.js';
+import { scanForexPatterns, PATTERN_TYPES } from './forexPatternEngine.js';
 
 /**
  * 1st-Stage Multi-Indicator Filter for Forex Currency Pairs.
@@ -210,7 +212,7 @@ export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol, options
   }
 
   // ================= ANTI-ENTANGLEMENT (CHOP PREVENTION) =================
-  const isDeadMarket = adx14 < 13;
+  const isDeadMarket = adx14 < 18;
   const emaSepRatio = Math.abs(ema9 - ema21) / (atr14 || 1e-5);
   const ema50Distance = Math.abs(close - ema50) / (atr14 || 1e-5);
   const isEmaEntangled = (emaSepRatio < 0.18) && (ema50Distance < 0.25);
@@ -264,9 +266,11 @@ export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol, options
   if (stochK < stochD || stochCrossDown) sellScore += 7;
 
   // Market Pressure Confluence Booster & Counter-Pressure Penalty
+  const pBuy = Number(options.marketPressure?.probabilities?.buy_pressure || 0);
+  const pSell = Number(options.marketPressure?.probabilities?.sell_pressure || 0);
+  const revFlow = options.marketPressure?.reversal_confirmation || {};
+
   if (options.marketPressure) {
-    const pBuy = Number(options.marketPressure?.probabilities?.buy_pressure || 0);
-    const pSell = Number(options.marketPressure?.probabilities?.sell_pressure || 0);
     if (pBuy >= 0.40) buyScore += 8;
     if (pBuy >= 0.50) buyScore += 4;
     if (pSell >= 0.40) sellScore += 8;
@@ -280,12 +284,91 @@ export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol, options
   buyScore = Math.min(100, Math.max(0, buyScore));
   sellScore = Math.min(100, Math.max(0, sellScore));
 
+  // ================= TRACK 4: REVERSAL PATTERN DETECTION & MARKET PRESSURE VERIFICATION =================
+  let patternScan = null;
+  try {
+    patternScan = scanForexPatterns(pairBars, { symbol });
+  } catch {}
+
+  const confirmedPatterns = patternScan?.confirmedPatterns || [];
+  const topDoubleBottom = confirmedPatterns.find(p => p.type === PATTERN_TYPES.DOUBLE_BOTTOM || p.type === PATTERN_TYPES.SUPPORT_BOUNCE || (p.type?.includes('ABCD') && p.direction === 'BUY'));
+  const topDoubleTop = confirmedPatterns.find(p => p.type === PATTERN_TYPES.DOUBLE_TOP || p.type === PATTERN_TYPES.RESISTANCE_REJECTION || (p.type?.includes('ABCD') && p.direction === 'SELL'));
+
+  // Comprehensive Reversal Checks from forexPriceAction (Divergence, Reversal Candles, SFP)
+  const revBuyCheck = checkComprehensiveReversal(pairBars, { rsiSeries: rsiCalc }, 'SELL'); // Bullish Reversal at bottom
+  const revSellCheck = checkComprehensiveReversal(pairBars, { rsiSeries: rsiCalc }, 'BUY');  // Bearish Reversal at top
+
+  let isReversalBuy = false;
+  let isReversalSell = false;
+  let reversalSetupReason = '';
+  let reversalPivotPrice = null;
+
+  // Candlestick Microstructure for Reversal Confirmation (Anti-Sweep / Anti-Falling-Knife Guard)
+  const curBar = pairBars[lastIdx];
+  const prevBar = pairBars[lastIdx - 1] || curBar;
+  const curO = Number(curBar.open);
+  const curC = Number(curBar.close);
+  const curH = Number(curBar.high);
+  const curL = Number(curBar.low);
+  const curRange = (curH - curL) + 1e-9;
+  const curLowerWick = Math.min(curO, curC) - curL;
+  const curLowerWickRatio = curLowerWick / curRange;
+  const curUpperWick = curH - Math.max(curO, curC);
+  const curUpperWickRatio = curUpperWick / curRange;
+
+  const prevO = Number(prevBar.open);
+  const prevC = Number(prevBar.close);
+  const prevH = Number(prevBar.high);
+  const prevL = Number(prevBar.low);
+  const prevRange = (prevH - prevL) + 1e-9;
+  const prevLowerWick = Math.min(prevO, prevC) - prevL;
+  const prevLowerWickRatio = prevLowerWick / prevRange;
+  const prevUpperWick = prevH - Math.max(prevO, prevC);
+  const prevUpperWickRatio = prevUpperWick / prevRange;
+
+  // Bullish Reversal Confirmation: Must show lower rejection wick (>= 25%) OR bullish reversal candle bounce
+  const hasBullishRebound = (curLowerWickRatio >= 0.25 || prevLowerWickRatio >= 0.25 || curC > curO);
+  const isFallingKnife = curC < curO && ((curO - curC) / curRange > 0.60) && curLowerWickRatio < 0.15;
+
+  // Bearish Reversal Confirmation: Must show upper rejection wick (>= 25%) OR bearish reversal candle push-down
+  const hasBearishRejection = (curUpperWickRatio >= 0.25 || prevUpperWickRatio >= 0.25 || curC < curO);
+  const isRisingRocket = curC > curO && ((curC - curO) / curRange > 0.60) && curUpperWickRatio < 0.15;
+
+  // 1. Evaluate Bullish Reversal (BUY Opportunity at support/low):
+  // Chart condition: Bullish Divergence OR Bullish SFP / Morning Star OR Double Bottom / Support Bounce
+  // Order flow condition: pBuy >= 0.33 and pBuy >= pSell * 0.95 or revFlow.bullish_flow_confirmed
+  const hasBullishChartReversal = revBuyCheck.hasOpposingReversal || Boolean(topDoubleBottom);
+  const hasBullishOrderFlow = (pBuy >= 0.33 && pBuy >= pSell * 0.95) || Boolean(revFlow.bullish_flow_confirmed);
+  if (hasBullishChartReversal && hasBullishOrderFlow && pSell < 0.50 && hasBullishRebound && !isFallingKnife) {
+    isReversalBuy = true;
+    const patDesc = topDoubleBottom ? `Pattern: ${topDoubleBottom.type} (${topDoubleBottom.reasons?.[0] || ''})` : '';
+    const actionDesc = revBuyCheck.hasOpposingReversal ? revBuyCheck.reason : '';
+    reversalSetupReason = [actionDesc, patDesc].filter(Boolean).join(' | ');
+    reversalPivotPrice = revBuyCheck.pivotAnchor || topDoubleBottom?.levels?.neckline || lows[lastIdx];
+    // Reversal conviction bonus score
+    buyScore = Math.max(buyScore, Math.min(95, 65 + (pBuy >= 0.40 ? 15 : 5) + (revBuyCheck.signalCount >= 2 ? 15 : 5)));
+  }
+
+  // 2. Evaluate Bearish Reversal (SELL Opportunity at resistance/high):
+  // Chart condition: Bearish Divergence OR Bearish SFP / Evening Star OR Double Top / Resistance Rejection
+  // Order flow condition: pSell >= 0.33 and pSell >= pBuy * 0.95 or revFlow.bearish_flow_confirmed
+  const hasBearishChartReversal = revSellCheck.hasOpposingReversal || Boolean(topDoubleTop);
+  const hasBearishOrderFlow = (pSell >= 0.33 && pSell >= pBuy * 0.95) || Boolean(revFlow.bearish_flow_confirmed);
+  if (hasBearishChartReversal && hasBearishOrderFlow && pBuy < 0.50 && hasBearishRejection && !isRisingRocket) {
+    isReversalSell = true;
+    const patDesc = topDoubleTop ? `Pattern: ${topDoubleTop.type} (${topDoubleTop.reasons?.[0] || ''})` : '';
+    const actionDesc = revSellCheck.hasOpposingReversal ? revSellCheck.reason : '';
+    reversalSetupReason = [actionDesc, patDesc].filter(Boolean).join(' | ');
+    reversalPivotPrice = revSellCheck.pivotAnchor || topDoubleTop?.levels?.neckline || highs[lastIdx];
+    // Reversal conviction bonus score
+    sellScore = Math.max(sellScore, Math.min(95, 65 + (pSell >= 0.40 ? 15 : 5) + (revSellCheck.signalCount >= 2 ? 15 : 5)));
+  }
+
   // ================= MACRO DXY DIRECTIONAL CALIBRATION =================
   const cleanSym = String(symbol || '').replace('=X', '').toUpperCase();
   const isUsdQuote = ['EURUSD', 'GBPUSD', 'AUDUSD', 'NZDUSD'].includes(cleanSym);
   const isUsdBase = ['USDJPY', 'USDCHF', 'USDCAD'].includes(cleanSym);
 
-  // Determine if BUY or SELL is counter-trend against DXY
   let isBuyCounterTrend = false;
   let isSellCounterTrend = false;
   if (dxyTrend === 'BULLISH') {
@@ -308,17 +391,53 @@ export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol, options
     ? dataHarvestMinScore
     : (isSellCounterTrend ? 70 : 55);
 
-  // ================= SELECTION & REASONS =================
+  // ================= SELECTION, SHIELD VETO & SWORD REVERSAL =================
   const reasons = [];
   let bias = 'NEUTRAL';
   let activeTrack = 'NONE';
   let confluenceScore = 0;
   let qualified = false;
 
-  if (isDeadMarket && !dataHarvestLiveMode) {
-    reasons.push(`🚫 กรองทิ้ง: ADX ต่ำมาก (${adx14.toFixed(1)} < 13) ตลาดไม่มีสภาพคล่อง`);
-  } else if (!dataHarvestLiveMode && isEmaEntangled && !isSqueezeBreakoutBuy && !isSqueezeBreakoutSell) {
+  // SHIELD CHECK 1: If trend wants to BUY, check for Bearish Reversal Trap (buying the top)
+  const isTrendBuyCandidate = buyScore >= minBuyScore && buyScore > sellScore && !isReversalBuy;
+  const isTrendSellCandidate = sellScore >= minSellScore && sellScore > buyScore && !isReversalSell;
+
+  if (isTrendBuyCandidate && revSellCheck.hasOpposingReversal && (pSell >= 0.35 || revFlow.bearish_flow_confirmed)) {
+    reasons.push(`🛡️ [VETO TRAP] สกัดกั้นสัญญาณ BUY ยอดดอย: ตรวจพบ ${revSellCheck.reason} พร้อม Market Pressure ยืนยันแรงขาย ${(pSell * 100).toFixed(0)}%`);
+    if (isReversalSell) {
+      bias = 'SELL';
+      activeTrack = 'REVERSAL_CONVICTION';
+      confluenceScore = sellScore;
+      qualified = true;
+      reasons.push(`🚀 [REVERSAL_CONVICTION] พลิกเข้า SELL ตามจุดกลับตัวยอดดอย: ${reversalSetupReason}`);
+    }
+  } else if (isTrendSellCandidate && revBuyCheck.hasOpposingReversal && (pBuy >= 0.35 || revFlow.bullish_flow_confirmed)) {
+    reasons.push(`🛡️ [VETO TRAP] สกัดกั้นสัญญาณ SELL ก้นเหว: ตรวจพบ ${revBuyCheck.reason} พร้อม Market Pressure ยืนยันแรงซื้อ ${(pBuy * 100).toFixed(0)}%`);
+    if (isReversalBuy) {
+      bias = 'BUY';
+      activeTrack = 'REVERSAL_CONVICTION';
+      confluenceScore = buyScore;
+      qualified = true;
+      reasons.push(`🚀 [REVERSAL_CONVICTION] พลิกเข้า BUY ตามจุดกลับตัวก้นเหว: ${reversalSetupReason}`);
+    }
+  } else if (isDeadMarket && !dataHarvestLiveMode && !isReversalBuy && !isReversalSell) {
+    reasons.push(`🚫 กรองทิ้ง: ADX ต่ำมาก (${adx14.toFixed(1)} < 18) ตลาดไร้เทรนด์/ไซด์เวย์`);
+  } else if (!dataHarvestLiveMode && isEmaEntangled && !isSqueezeBreakoutBuy && !isSqueezeBreakoutSell && !isReversalBuy && !isReversalSell) {
     reasons.push(`🚫 กรองทิ้ง: เส้น EMA9/21/50 พันกันนิ่งในตลาด Sideway (EMA Sep: ${emaSepRatio.toFixed(2)}x ATR < 0.18x)`);
+  } else if (isReversalBuy && buyScore >= minBuyScore) {
+    // SWORD TRACK 4: Confirmed Reversal BUY Opportunity!
+    bias = 'BUY';
+    activeTrack = 'REVERSAL_CONVICTION';
+    confluenceScore = buyScore;
+    qualified = true;
+    reasons.push(`🚀 [REVERSAL_CONVICTION] สัญญาณจุดกลับตัว BUY ก้นเหว: ${reversalSetupReason} | Pressure ยืนยันแรงซื้อ ${(pBuy * 100).toFixed(0)}%`);
+  } else if (isReversalSell && sellScore >= minSellScore) {
+    // SWORD TRACK 4: Confirmed Reversal SELL Opportunity!
+    bias = 'SELL';
+    activeTrack = 'REVERSAL_CONVICTION';
+    confluenceScore = sellScore;
+    qualified = true;
+    reasons.push(`🚀 [REVERSAL_CONVICTION] สัญญาณจุดกลับตัว SELL ยอดดอย: ${reversalSetupReason} | Pressure ยืนยันแรงขาย ${(pSell * 100).toFixed(0)}%`);
   } else if (buyScore >= minBuyScore && buyScore > sellScore) {
     bias = 'BUY';
     confluenceScore = buyScore;
@@ -357,6 +476,10 @@ export function evaluateForexFirstStageFilter(pairBars, dxyBars, symbol, options
     activeTrack,
     confluenceScore,
     reasons,
+    reversalPivotPrice,
+    reversalSetupReason,
+    isReversalBuy,
+    isReversalSell,
     indicators: {
       close,
       ema9,

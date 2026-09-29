@@ -142,7 +142,7 @@ def load_valid_live_results():
         valid = raw[
             source_mask &
             (raw['market_type'].isin(['forex', 'forex_shadow'])) &
-            (~raw['exit_reason'].isin(['OPEN', 'SYNC_PENDING'])) &
+            (~raw['exit_reason'].isin(['OPEN', 'SYNC_PENDING', 'CLOSED_PRESSURE_EARLY_CUT', 'EXIT_CHALLENGER_EARLY_CUT'])) &
             (raw['is_win'].notna()) &
             (raw['action'].isin(['BUY', 'SELL'])) &
             (raw['entry_time'].notna()) &
@@ -239,7 +239,7 @@ def next_version(registry):
     return f'challenger-v{latest[0]}.{latest[1] + 1}.0'
 
 
-def main(target_version=None, use_observations=True, promote=False):
+def main(target_version=None, use_observations=True, use_live=False, obs_weight=2, promote=False):
     print('=' * 75)
     print('🚀 ฝึก Forex Challenger Model บน dataset เดิม (GradientBoosting)')
     print('=' * 75)
@@ -249,7 +249,7 @@ def main(target_version=None, use_observations=True, promote=False):
 
     df = add_derived_features(apply_labels(pd.read_csv(DATA_PATH)))
     clean_base = df.dropna(subset=FEATURE_COLS + ['target_buy', 'target_sell']).reset_index(drop=True)
-    live = load_valid_live_results()
+    live = load_valid_live_results() if use_live else pd.DataFrame()
     observations = load_valid_observations() if use_observations else pd.DataFrame()
     live_trade_samples = int((live['market_type'] == 'forex').sum()) if not live.empty and 'market_type' in live.columns else 0
     shadow_trade_samples = int((live['market_type'] == 'forex_shadow').sum()) if not live.empty and 'market_type' in live.columns else 0
@@ -263,19 +263,20 @@ def main(target_version=None, use_observations=True, promote=False):
     train_parts = [base_train]
     val_parts = [base_val]
 
-    # 2. Live/Shadow Trades split BEFORE weighting to prevent train-test data leakage
+    # 2. Live/Shadow Trades split (Disabled by default to avoid feature poisoning: ret_1=0, ret_5=future pips)
     if len(live) >= 4:
         live_clean = live[cols].reset_index(drop=True)
         live_split = int(len(live_clean) * 0.8)
         live_train = live_clean.iloc[:live_split]
         live_val = live_clean.iloc[live_split:]
 
-        live_train_weighted = pd.concat([live_train] * 5, ignore_index=True)
+        live_train_weighted = pd.concat([live_train] * 2, ignore_index=True)
         train_parts.append(live_train_weighted)
         val_parts.append(live_val)
-        print(f'✅ เพิ่ม Challenger shadow trades: {len(live_train)} train (x5) + {len(live_val)} unweighted val')
+        print(f'⚠️ เพิ่ม Challenger live/shadow trades: {len(live_train)} train (x2) + {len(live_val)} unweighted val')
     else:
-        print(f'ℹ️ Challenger shadow trade ที่ใช้ได้มี {len(live)} รายการ จึงใช้ historical เป็นหลัก')
+        print('ℹ️ ข้าม trade_results (ป้องกัน feature poisoning จาก ret_1=0 และ ret_5=future pips)')
+        print('   ใช้ Clean Base + MT5 Labeled Observations ซึ่งมีฟีเจอร์แท้ 13 มิติครบถ้วน')
 
     # 3. Observations split BEFORE weighting to prevent train-test data leakage
     if len(observations) >= 4:
@@ -284,10 +285,10 @@ def main(target_version=None, use_observations=True, promote=False):
         obs_train = obs_clean.iloc[:obs_split]
         obs_val = obs_clean.iloc[obs_split:]
 
-        obs_train_weighted = pd.concat([obs_train] * 5, ignore_index=True)
+        obs_train_weighted = pd.concat([obs_train] * max(1, int(obs_weight)), ignore_index=True)
         train_parts.append(obs_train_weighted)
         val_parts.append(obs_val)
-        print(f'✅ เพิ่ม Labeled observations: {len(obs_train)} train (x5) + {len(obs_val)} unweighted val')
+        print(f'✅ เพิ่ม Labeled observations: {len(obs_train)} train (x{obs_weight}) + {len(obs_val)} unweighted val')
 
     train_df = pd.concat(train_parts, ignore_index=True)
     val_df = pd.concat(val_parts, ignore_index=True)
@@ -406,7 +407,7 @@ def main(target_version=None, use_observations=True, promote=False):
         'live_trade_samples': live_trade_samples,
         'shadow_trade_samples': shadow_trade_samples,
         'observation_samples': observation_samples,
-        'source_mode': 'trade_results_plus_observations' if use_observations else 'trade_results_compatibility',
+        'source_mode': 'clean_base_plus_mt5_observations' if (use_observations and not use_live) else ('trade_results_plus_observations' if use_observations else 'base_historical'),
         'mixed_sources': [list(source) for source in sorted(MIXED_SOURCES)],
         'total_samples': int(len(clean))
     }, ensure_ascii=False))
@@ -420,5 +421,20 @@ if __name__ == '__main__':
         if version_index < len(sys.argv):
             requested_version = sys.argv[version_index]
     use_observations = '--no-observations' not in sys.argv
+    use_live = '--include-live' in sys.argv
+    obs_weight = 2
+    if '--obs-weight' in sys.argv:
+        w_idx = sys.argv.index('--obs-weight') + 1
+        if w_idx < len(sys.argv):
+            try:
+                obs_weight = int(sys.argv[w_idx])
+            except ValueError:
+                pass
     promote = '--promote' in sys.argv
-    raise SystemExit(main(requested_version, use_observations=use_observations, promote=promote))
+    raise SystemExit(main(
+        requested_version,
+        use_observations=use_observations,
+        use_live=use_live,
+        obs_weight=obs_weight,
+        promote=promote
+    ))

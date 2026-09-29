@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { isMainLiveExecutionEnabled } from './tradingMode.js';
 
 dotenv.config();
 
@@ -16,8 +17,31 @@ const FOREX_CHALLENGER_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_fore
 const FOREX_RANGE_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_range_bridge.py');
 const FOREX_EXIT_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_forex_exit_bridge.py');
 const FOREX_MARKET_PRESSURE_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_market_pressure_bridge.py');
+const SMART_EARLY_CUT_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_smart_cut_bridge.py');
 const CRYPTO_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_crypto_bridge.py');
 const GOLD_BRIDGE_PATH = path.join(ROOT_DIR, 'python', 'predict_gold_bridge.py');
+
+function annotateModelAvailability(result, available) {
+  const annotate = prediction => ({ ...prediction, modelAvailable: available });
+  return Array.isArray(result) ? result.map(annotate) : annotate(result || {});
+}
+
+function unavailableModelPrediction(featuresObj, modelName, error) {
+  const unavailable = feature => ({
+    confidence: 0.0001,
+    raw_buy: 0,
+    raw_sell: 0,
+    prob_buy: 0,
+    prob_sell: 0,
+    direction: feature?.direction || null,
+    model: `${modelName}_unavailable`,
+    modelAvailable: false,
+    error: String(error?.message || error || 'Python bridge unavailable').slice(0, 240)
+  });
+  return Array.isArray(featuresObj)
+    ? featuresObj.map(unavailable)
+    : unavailable(featuresObj);
+}
 
 /**
  * Predicts AI Swing confidence for US Stocks using Python ML Bridge or quantitative heuristic fallback.
@@ -29,6 +53,10 @@ export async function predictConfidence(featuresObj) {
     const output = await runPythonPredict(featuresObj);
     return output;
   } catch (err) {
+    if (isMainLiveExecutionEnabled()) {
+      console.error('Python Stock ML bridge failed; live entries require the model:', err.message);
+      return unavailableModelPrediction(featuresObj, 'stock', err);
+    }
     console.warn('⚠️ Python Stock ML bridge execution failed, using quantitative fallback scorer:', err.message);
     if (Array.isArray(featuresObj)) {
       return featuresObj.map(f => fallbackScore(f));
@@ -47,6 +75,10 @@ export async function predictForexConfidence(featuresObj) {
     const output = await runPythonForexPredict(featuresObj);
     return output;
   } catch (err) {
+    if (isMainLiveExecutionEnabled()) {
+      console.error('Python Forex ML bridge failed; live entries require the model:', err.message);
+      return unavailableModelPrediction(featuresObj, 'forex', err);
+    }
     console.warn('⚠️ Python Forex ML bridge execution failed, using quantitative fallback scorer:', err.message);
     if (Array.isArray(featuresObj)) {
       return featuresObj.map(f => fallbackForexScore(f));
@@ -76,6 +108,22 @@ export async function predictForexMarketPressure(bars, symbol = 'EURUSD=X') {
   return runPythonModelPredict({ bars, symbol }, FOREX_MARKET_PRESSURE_BRIDGE_PATH, 'Forex Market Pressure');
 }
 
+/** Predicts smart early cut vs rebound using the trained SECRC trajectory model. */
+export async function predictSmartEarlyCut(featuresObj) {
+  try {
+    return await runPythonModelPredict(featuresObj, SMART_EARLY_CUT_BRIDGE_PATH, 'Smart Early Cut');
+  } catch (err) {
+    console.warn('⚠️ Python Smart Early Cut ML bridge failed:', err.message);
+    return {
+      action: 'HOLD',
+      should_cut: false,
+      collapse_prob: 0.35,
+      rebound_prob: 0.65,
+      reason: 'Fallback: Default HOLD to protect winning rebounds'
+    };
+  }
+}
+
 /**
  * Predicts Gold (GOLD/XAUUSD) AI confidence using the dedicated Gold M5 ML LightGBM Model.
  * @param {Object} featuresObj Feature dictionary
@@ -86,6 +134,10 @@ export async function predictGoldConfidence(featuresObj) {
     const output = await runPythonModelPredict(featuresObj, GOLD_BRIDGE_PATH, 'Gold M5');
     return output;
   } catch (err) {
+    if (isMainLiveExecutionEnabled()) {
+      console.error('Python Gold ML bridge failed; live entries require the model:', err.message);
+      return unavailableModelPrediction(featuresObj, 'gold', err);
+    }
     console.warn('⚠️ Python Gold ML bridge execution failed, using quantitative fallback scorer:', err.message);
     return goldFallbackScore(featuresObj);
   }
@@ -168,6 +220,10 @@ export async function predictCryptoConfidence(featuresObj) {
     const output = await runPythonCryptoPredict(featuresObj);
     return output;
   } catch (err) {
+    if (isMainLiveExecutionEnabled()) {
+      console.error('Python Crypto ML bridge failed; live entries require the model:', err.message);
+      return unavailableModelPrediction(featuresObj, 'crypto', err);
+    }
     console.warn('⚠️ Python Crypto ML bridge execution failed, using quantitative fallback scorer:', err.message);
     if (Array.isArray(featuresObj)) {
       return featuresObj.map(f => cryptoFallbackScore(f));
@@ -207,7 +263,7 @@ function runPythonCryptoPredict(featuresObj) {
         if (parsed.error) {
           return reject(new Error(parsed.error));
         }
-        resolve(parsed);
+        resolve(annotateModelAvailability(parsed, true));
       } catch (e) {
         reject(new Error(`JSON parse error from Crypto bridge output: ${stdout}`));
       }
@@ -253,7 +309,7 @@ function runPythonModelPredict(featuresObj, bridgePath, label) {
         if (parsed.error) {
           return reject(new Error(parsed.error));
         }
-        resolve(parsed);
+        resolve(annotateModelAvailability(parsed, true));
       } catch (e) {
         reject(new Error(`JSON parse error from ${label} bridge output: ${stdout}`));
       }
@@ -322,7 +378,7 @@ function runPythonPredict(featuresObj) {
         if (parsed.error) {
           return reject(new Error(parsed.error));
         }
-        resolve(parsed);
+        resolve(annotateModelAvailability(parsed, true));
       } catch (e) {
         reject(new Error(`JSON parse error from bridge output: ${stdout}`));
       }

@@ -67,6 +67,7 @@ def main():
                 'raw_buy': round(p_buy, 4),
                 'raw_sell': round(p_sell, 4),
                 'direction': direction,
+                'confidence_semantics': 'relative_directional_preference_not_win_probability',
                 'model': 'forex_challenger_gradient_boosting',
                 'model_version': version,
             })

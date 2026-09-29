@@ -2,8 +2,10 @@ import { getPool } from '../config/database.js';
 import { CRYPTO_UNIVERSE, fetchBinanceCryptoDataParallel } from './marketData.js';
 import { placeOrder, modifyStopLoss, closePosition, getRates, getOpenPositions } from './mt5Broker.js';
 import { recordTradeEntry, recordTradeExit, syncMt5PositionsWithDatabase } from './tradeResultTracker.js';
-import { predictCryptoConfidence } from './modelPredictor.js';
-import { checkRejectionCandle } from './forexPriceAction.js';
+import { predictCryptoConfidence, predictForexMarketPressure } from './modelPredictor.js';
+import { recordMarketPressureObservation } from './marketPressureObservationTracker.js';
+import { checkRejectionCandle, checkComprehensiveReversal, findStructuralInvalidationBarrier } from './forexPriceAction.js';
+import { evaluateSrRejectionHarvest } from './forexExitEngine.js';
 import { EMA, RSI, ATR, BollingerBands, ADX, MACD } from 'technicalindicators';
 import dotenv from 'dotenv';
 
@@ -17,6 +19,8 @@ const CRYPTO_REJECTION_FILTER_ENABLED = process.env.CRYPTO_REJECTION_FILTER_ENAB
 const CRYPTO_MAX_POSITIONS_PER_SYMBOL = Math.max(1, Number(process.env.CRYPTO_MAX_POSITIONS_PER_SYMBOL || 4));
 const CRYPTO_LOT_SIZE = Number(process.env.CRYPTO_LOT_SIZE || 0.01);
 const CRYPTO_MODEL_SOURCE_FALLBACK = 'crypto_quantitative_fallback';
+const CRYPTO_MARKET_PRESSURE_ENABLED = process.env.CRYPTO_MARKET_PRESSURE_ENABLED !== 'false';
+const CRYPTO_PRESSURE_EXIT_ENABLED = process.env.CRYPTO_PRESSURE_EXIT_ENABLED !== 'false';
 
 function validateCryptoExitGeometry(action, entryPrice, slPrice, tpPrice) {
   const entry = Number(entryPrice);
@@ -276,6 +280,25 @@ export async function executeCryptoScanCycle() {
     const ind = calculateCryptoIndicators(m5Bars);
     if (!ind) continue;
 
+    // Predict Market Pressure & Indecision for Crypto (BTCUSD, ETHUSD, SOLUSD)
+    let marketPressure = null;
+    if (CRYPTO_MARKET_PRESSURE_ENABLED) {
+      try {
+        marketPressure = await predictForexMarketPressure(m5Bars, symbol);
+        if (marketPressure) {
+          await recordMarketPressureObservation({
+            pool,
+            symbol,
+            barTime: m5Bars[m5Bars.length - 1]?.time || new Date(),
+            pressureResult: marketPressure
+          });
+          console.log(`🧭 [CRYPTO PRESSURE] ${symbol}: ${marketPressure.state} | Buy: ${(marketPressure.probabilities.buy_pressure*100).toFixed(0)}% | Sell: ${(marketPressure.probabilities.sell_pressure*100).toFixed(0)}% | Indecision: ${(marketPressure.probabilities.indecision*100).toFixed(0)}%`);
+        }
+      } catch (pErr) {
+        console.warn(`⚠️ [Crypto] Market Pressure inference skipped for ${symbol}:`, pErr.message);
+      }
+    }
+
     const {
       lastClose, lastHigh, lastLow, ema20, ema50, ema200, rsi, atr, bb, adx,
       volumeRatio, isBbSqueeze, bbWidth, ret1, ret5, atrPct, emaSpread2050,
@@ -323,6 +346,8 @@ export async function executeCryptoScanCycle() {
       let highestPrice = Number(pos.highest_price || entryPrice);
       const isBuy = pos.status_note.includes('BUY');
       const heldMinutes = Math.floor((Date.now() - new Date(pos.entry_date).getTime()) / (1000 * 60));
+      const profitDistance = isBuy ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+      const slPrice = Number(pos.sl_price || 0);
 
       if (isBuy && currentPrice > highestPrice) {
         highestPrice = currentPrice;
@@ -332,22 +357,74 @@ export async function executeCryptoScanCycle() {
         await pool.query('UPDATE active_positions SET highest_price = ? WHERE mt5_ticket = ?', [highestPrice, ticket]);
       }
 
-      // 1. Dynamic Break-Even Lock: When price moves +1.0x ATR, lock SL to Break-Even +0.2x ATR
-      const profitDistance = isBuy ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
-      const slPrice = Number(pos.sl_price || 0);
-
-      if (profitDistance >= 1.0 * atr && !pos.status_note.includes('BE_LOCKED')) {
+      // 1. Dynamic 2-Tier Break-Even Lock:
+      // Tier 1: Fast BE at +0.45x ATR -> Move SL to Positive Break-Even (Spread Buffer Offset)
+      if (profitDistance >= 0.45 * atr && !pos.status_note.includes('BE_T1') && !pos.status_note.includes('BE_T2') && !pos.status_note.includes('BE_LOCKED')) {
+        const defaultOffset = symbol === 'BTCUSD' ? 12.0 : (symbol === 'ETHUSD' ? 1.00 : 0.20);
+        const spreadOffset = Math.max(defaultOffset, 0.08 * atr);
         const beSl = isBuy
-          ? Number((entryPrice + 0.2 * atr).toFixed(cfg.digits))
-          : Number((entryPrice - 0.2 * atr).toFixed(cfg.digits));
+          ? Number((entryPrice + spreadOffset).toFixed(cfg.digits))
+          : Number((entryPrice - spreadOffset).toFixed(cfg.digits));
         const canMove = isBuy ? (beSl > slPrice) : (slPrice === 0 || beSl < slPrice);
         if (canMove) {
-          console.log(`🔒 [Crypto Break-Even] ปรับ SL ไม้ #${ticket} (${symbol}) สู่ Break-Even ที่ ${beSl}`);
+          console.log(`🔒 [Crypto Break-Even T1] ปรับ SL ไม้ #${ticket} (${symbol}) สู่ Positive Break-Even (+Offset ${spreadOffset.toFixed(2)}) ที่ ${beSl}`);
           await modifyStopLoss(ticket, beSl, pos.tp_price);
           await pool.query(
-            `UPDATE active_positions SET sl_price = ?, status_note = CONCAT(status_note, '_BE_LOCKED') WHERE mt5_ticket = ?`,
+            `UPDATE active_positions SET sl_price = ?, status_note = CONCAT(status_note, '_BE_T1') WHERE mt5_ticket = ?`,
             [beSl, ticket]
           );
+          pos.sl_price = beSl;
+          pos.status_note += '_BE_T1';
+        }
+      }
+
+      // Tier 2: Profit Lock at +0.90x ATR -> Lock SL to Entry +/- 0.25x ATR
+      if (profitDistance >= 0.90 * atr && !pos.status_note.includes('BE_T2') && !pos.status_note.includes('BE_LOCKED')) {
+        const beSl2 = isBuy
+          ? Number((entryPrice + 0.25 * atr).toFixed(cfg.digits))
+          : Number((entryPrice - 0.25 * atr).toFixed(cfg.digits));
+        const canMove = isBuy ? (beSl2 > slPrice) : (slPrice === 0 || beSl2 < slPrice);
+        if (canMove) {
+          console.log(`🔒 [Crypto Break-Even T2] ล็อกกำไร ไม้ #${ticket} (${symbol}) ที่ +0.25x ATR (${beSl2})`);
+          await modifyStopLoss(ticket, beSl2, pos.tp_price);
+          await pool.query(
+            `UPDATE active_positions SET sl_price = ?, status_note = CONCAT(status_note, '_BE_T2_BE_LOCKED') WHERE mt5_ticket = ?`,
+            [beSl2, ticket]
+          );
+          pos.sl_price = beSl2;
+          pos.status_note += '_BE_T2_BE_LOCKED';
+        }
+      }
+
+      // 1.5 Structural Risk Mitigation SL Tightening (Dynamic Invalidation Behind Major S/R)
+      // When trade has not yet reached BE or is consolidating, tighten SL behind verified MAJOR Swing High (SELL) or Swing Low (BUY)
+      // to reduce maximum loss while giving price ample room to absorb wick noise and spread.
+      if (!pos.status_note.includes('BE_T1') && !pos.status_note.includes('BE_T2') && !pos.status_note.includes('BE_LOCKED')) {
+        const minBuf = symbol === 'BTCUSD' ? 45.0 : (symbol === 'ETHUSD' ? 4.50 : 0.60);
+        const minImp = symbol === 'BTCUSD' ? 25.0 : (symbol === 'ETHUSD' ? 2.50 : 0.40);
+        const minAdvDist = symbol === 'BTCUSD' ? 40.0 : (symbol === 'ETHUSD' ? 4.00 : 0.50);
+
+        const structBarrier = findStructuralInvalidationBarrier(m5Bars, currentPrice, isBuy, slPrice, atr, {
+          pivotBars: 3,
+          bufferMultiplier: 0.35,
+          minBreathingAtr: 0.50,
+          minBuffer: minBuf,
+          entryPrice,
+          minAdverseDistance: minAdvDist
+        });
+
+        if (structBarrier && structBarrier.riskReduced >= minImp) {
+          const newSl = Number(structBarrier.candidateSl.toFixed(cfg.digits));
+          const canMove = isBuy ? (newSl > slPrice) : (slPrice === 0 || newSl < slPrice);
+          if (canMove) {
+            console.log(`🛡️ [Crypto Structural SL Tightening] ดึง SL ไม้ #${ticket} (${symbol} ${isBuy ? 'BUY' : 'SELL'}) ดักหลังแนว${isBuy ? 'รับ' : 'ต้าน'}หลัก $${structBarrier.barrierPrice.toFixed(cfg.digits)} ที่ $${newSl} (ลดความเสี่ยงลง $${structBarrier.riskReduced.toFixed(2)} | Buffer: $${minBuf})`);
+            await modifyStopLoss(ticket, newSl, pos.tp_price);
+            await pool.query(
+              `UPDATE active_positions SET sl_price = ?, status_note = IF(status_note LIKE '%_STRUCT_SL%', status_note, CONCAT(status_note, '_STRUCT_SL')) WHERE mt5_ticket = ?`,
+              [newSl, ticket]
+            );
+            pos.sl_price = newSl;
+          }
         }
       }
 
@@ -367,13 +444,67 @@ export async function executeCryptoScanCycle() {
         }
       }
 
-      // 3. AI / Technical Trend Reversal Exit: If market structure breaks against the position, exit proactively
-      const isTrendBroken = isBuy
-        ? (lastClose < ema50 && ema20 < ema50 && adx >= 20)
-        : (lastClose > ema50 && ema20 > ema50 && adx >= 20);
+      // 2.7 S/R Rejection Harvest: Lock in profits when price tests structural resistance/support and rejects
+      try {
+        const srHarvestCheck = evaluateSrRejectionHarvest({
+          action: isBuy ? 'BUY' : 'SELL',
+          currentPrice,
+          entryPrice,
+          bars: m5Bars,
+          atr,
+          pipSize: 1.0,
+          holdMinutes,
+          minProfitAtrMult: 0.45,
+          minHoldMinutes: 5
+        });
 
-      if (isTrendBroken && heldMinutes >= 15) {
-        console.log(`🚨 [Crypto AI Trend Exit] ไม้ #${ticket} (${symbol} ${isBuy ? 'BUY' : 'SELL'}) โครงสร้างเทรนด์กลับทิศทาง (EMA20/50 Cross & ADX ${adx.toFixed(1)}) -> สั่งปิดตัดความเสี่ยงทันที`);
+        if (srHarvestCheck.shouldExit) {
+          console.log(`🎯 [Crypto S/R Rejection Harvest] ไม้ #${ticket} (${symbol} ${isBuy ? 'BUY' : 'SELL'}): ${srHarvestCheck.reason}`);
+          const closeRes = await closePosition(ticket);
+          if (closeRes && closeRes.success) {
+            await pool.query(`UPDATE active_positions SET status_note = 'CLOSED_SR_REJECTION_HARVEST' WHERE mt5_ticket = ?`, [ticket]);
+            await recordTradeExit({
+              ticket,
+              symbol,
+              exitPrice: currentPrice,
+              exitReason: 'CLOSED_SR_REJECTION_HARVEST',
+              realProfit: closeRes.profit ?? null
+            });
+            continue;
+          }
+        }
+      } catch (srErr) {
+        console.warn(`⚠️ [Crypto] Error evaluating S/R harvest exit for ${symbol}:`, srErr.message);
+      }
+
+      // 3. AI / Technical Trend Reversal Exit: Confirmed Structural Trend Breakdown (Anti-Shakeout Guard)
+      // Prevents premature cuts during temporary liquidity sweeps or shallow dips near entry.
+      const bar1 = m5Bars[m5Bars.length - 1];
+      const bar2 = m5Bars[m5Bars.length - 2] || bar1;
+      const c1 = Number(bar1.close);
+      const c2 = Number(bar2.close);
+
+      // Require 2 consecutive completed/forming bar closes beyond EMA50 to filter out single-bar wick sweeps
+      const isMultiBarTrendBreak = isBuy
+        ? (c1 < ema50 && c2 < ema50 && ema20 < ema50)
+        : (c1 > ema50 && c2 > ema50 && ema20 > ema50);
+
+      // Check adverse pressure if available
+      const pAdverseTrend = marketPressure
+        ? (isBuy ? Number(marketPressure.probabilities?.sell_pressure || 0) : Number(marketPressure.probabilities?.buy_pressure || 0))
+        : 0.40;
+
+      // Shakeout Guards:
+      // a) Position must be held >= 25 minutes (at least 5 completed M5 bars to allow pullback structure to develop)
+      // b) Position must actually be in adverse drawdown (<= -0.80x ATR). Never cut a shallow dip (>-0.5x ATR) right at support!
+      // c) Confirmed by multi-bar closes beyond EMA50 AND (adverse pressure >= 38% OR confirmed ADX trend >= 25)
+      const isConfirmedTrendBreak = isMultiBarTrendBreak &&
+        heldMinutes >= 25 &&
+        profitDistance <= -0.80 * atr &&
+        (pAdverseTrend >= 0.38 || adx >= 25);
+
+      if (isConfirmedTrendBreak) {
+        console.log(`🚨 [Crypto AI Trend Exit] ไม้ #${ticket} (${symbol} ${isBuy ? 'BUY' : 'SELL'}) โครงสร้างเทรนด์ยืนยันการหลุด 2 แท่งซ้อน (Close: $${c1.toFixed(cfg.digits)}, Drawdown: ${profitDistance.toFixed(cfg.digits)} | Adverse: ${(pAdverseTrend*100).toFixed(0)}%) -> สั่งปิดตัดความเสี่ยง`);
         const closeRes = await closePosition(ticket);
         if (closeRes && closeRes.success) {
           await pool.query(`UPDATE active_positions SET status_note = 'CLOSED_AI_TREND_EXIT' WHERE mt5_ticket = ?`, [ticket]);
@@ -385,6 +516,47 @@ export async function executeCryptoScanCycle() {
             realProfit: closeRes.profit ?? null
           });
           continue;
+        }
+      }
+
+      // 3.5 Active Market Pressure Intra-Trade Protection for Crypto
+      if (CRYPTO_PRESSURE_EXIT_ENABLED && marketPressure) {
+        const pAdverse = isBuy 
+          ? Number(marketPressure.probabilities?.sell_pressure || 0)
+          : Number(marketPressure.probabilities?.buy_pressure || 0);
+
+        // Case A: Profit Lock - If position is in profit >= 1.0x ATR and strong adverse reversal hits (>= 45%)
+        if (profitDistance >= 1.0 * atr && pAdverse >= 0.45) {
+          console.log(`🛡️ [Crypto Pressure Exit] ไม้ #${ticket} (${symbol}) กำไร +${profitDistance.toFixed(cfg.digits)} แต่เจอแรงสวนกลับ ${(pAdverse*100).toFixed(0)}% -> ล็อกกำไรทันทีก่อนโดนดึงกลับ!`);
+          const closeRes = await closePosition(ticket);
+          if (closeRes && closeRes.success) {
+            await pool.query(`UPDATE active_positions SET status_note = 'CLOSED_PRESSURE_PROFIT_LOCK' WHERE mt5_ticket = ?`, [ticket]);
+            await recordTradeExit({
+              ticket,
+              symbol,
+              exitPrice: currentPrice,
+              exitReason: 'CLOSED_PRESSURE_PROFIT_LOCK',
+              realProfit: closeRes.profit ?? null
+            });
+            continue;
+          }
+        }
+
+        // Case B: Severe Adverse Cut - If position is in loss >= 1.0x ATR and severe adverse pressure hits (>= 48%), cut early to prevent large SL!
+        if (profitDistance < -1.0 * atr && pAdverse >= 0.48 && heldMinutes >= 5) {
+          console.log(`✂️ [Crypto Pressure Early Cut] ไม้ #${ticket} (${symbol}) ติดลบ ${profitDistance.toFixed(cfg.digits)} และเจอแรงสวนกลับรุนแรง ${(pAdverse*100).toFixed(0)}% -> ตัดขาดทุนล่วงหน้าเพื่อรักษาทุน!`);
+          const closeRes = await closePosition(ticket);
+          if (closeRes && closeRes.success) {
+            await pool.query(`UPDATE active_positions SET status_note = 'CLOSED_PRESSURE_EARLY_CUT' WHERE mt5_ticket = ?`, [ticket]);
+            await recordTradeExit({
+              ticket,
+              symbol,
+              exitPrice: currentPrice,
+              exitReason: 'CLOSED_PRESSURE_EARLY_CUT',
+              realProfit: closeRes.profit ?? null
+            });
+            continue;
+          }
         }
       }
 
@@ -449,19 +621,109 @@ export async function executeCryptoScanCycle() {
       }
     }
 
-    // Track 3: Pullback & Support/Resistance Retest (Dip / Rally)
+    // Track 3: Pullback & Support/Resistance Retest (Dip / Rally) with Anti-Falling-Knife Guard
     if (!signalAction) {
       const isUptrend = ema50 > ema200 && h1Bullish;
       const isDowntrend = ema50 < ema200 && !h1Bullish;
 
-      if (isUptrend && lastLow <= ema20 * 1.003 && lastClose >= ema20 * 0.997 && rsi >= 40 && rsi <= 65) {
-        signalAction = 'BUY';
-        setupName = 'Bullish EMA 20 Pullback Dip';
-        patternConfirmed = true;
-      } else if (isDowntrend && lastHigh >= ema20 * 0.997 && lastClose <= ema20 * 1.003 && rsi >= 35 && rsi <= 60) {
-        signalAction = 'SELL';
-        setupName = 'Bearish EMA 20 Pullback Rally';
-        patternConfirmed = true;
+      if (isUptrend && lastLow <= ema20 * 1.003 && lastClose >= ema50 * 0.998 && rsi >= 38 && rsi <= 65) {
+        // Anti-Falling Knife & Candlestick Confirmation Guard
+        const curBar = m5Bars[m5Bars.length - 1];
+        const prevBar = m5Bars[m5Bars.length - 2] || curBar;
+        const prevBar2 = m5Bars[m5Bars.length - 3] || prevBar;
+        const prevBar3 = m5Bars[m5Bars.length - 4] || prevBar2;
+
+        const curOpen = Number(curBar.open);
+        const curClose = Number(curBar.close);
+        const curHigh = Number(curBar.high);
+        const curLow = Number(curBar.low);
+        const curRange = curHigh - curLow;
+        const curLowerWick = Math.min(curOpen, curClose) - curLow;
+        const curLowerWickRatio = curRange > 0 ? (curLowerWick / curRange) : 0;
+        const curBody = Math.abs(curClose - curOpen);
+        const curBodyRatio = curRange > 0 ? (curBody / curRange) : 0;
+
+        const prevOpen = Number(prevBar.open);
+        const prevClose = Number(prevBar.close);
+        const prevHigh = Number(prevBar.high);
+        const prevLow = Number(prevBar.low);
+        const prevRange = prevHigh - prevLow;
+        const prevLowerWick = Math.min(prevOpen, prevClose) - prevLow;
+        const prevLowerWickRatio = prevRange > 0 ? (prevLowerWick / prevRange) : 0;
+
+        // Check if market is in an aggressive multi-bar waterfall dump
+        const isWaterfallDump = (
+          Number(prevBar.close) < Number(prevBar.open) &&
+          Number(prevBar2.close) < Number(prevBar2.open) &&
+          Number(prevBar3.close) < Number(prevBar3.open) &&
+          curClose < curOpen
+        );
+
+        // Check if current or previous completed bar shows genuine buyer absorption / rejection
+        const hasReboundWick = curLowerWickRatio >= 0.25 || prevLowerWickRatio >= 0.30;
+        const isBullishCandle = curClose > curOpen || (prevClose > prevOpen && curClose >= prevLow);
+        const isBearishMarubozu = curClose < curOpen && curBodyRatio >= 0.60 && curLowerWickRatio < 0.15;
+
+        // Valid Dip Buy requires:
+        // 1. Not in a 4-bar consecutive waterfall dump
+        // 2. Not a dumping bearish marubozu
+        // 3. Demonstrates buyer responsiveness (lower rejection wick >= 25% OR bullish reversal candle)
+        if (!isWaterfallDump && !isBearishMarubozu && (hasReboundWick || isBullishCandle)) {
+          signalAction = 'BUY';
+          setupName = 'Bullish EMA 20 Pullback Dip (Confirmed Rebound)';
+          patternConfirmed = true;
+        } else {
+          console.log(`🛡️ [Crypto Anti-Falling-Knife] ${symbol} BUY Dip ข้ามคำสั่ง: แท่งเทียนยังไม่ยืนยันการเด้ง (Waterfall: ${isWaterfallDump}, Marubozu: ${isBearishMarubozu}, Wick: ${(curLowerWickRatio * 100).toFixed(0)}%, Bullish: ${isBullishCandle})`);
+        }
+      } else if (isDowntrend && lastHigh >= ema20 * 0.997 && lastClose <= ema50 * 1.002 && rsi >= 35 && rsi <= 62) {
+        // Anti-Rocket Short & Candlestick Confirmation Guard
+        const curBar = m5Bars[m5Bars.length - 1];
+        const prevBar = m5Bars[m5Bars.length - 2] || curBar;
+        const prevBar2 = m5Bars[m5Bars.length - 3] || prevBar;
+        const prevBar3 = m5Bars[m5Bars.length - 4] || prevBar2;
+
+        const curOpen = Number(curBar.open);
+        const curClose = Number(curBar.close);
+        const curHigh = Number(curBar.high);
+        const curLow = Number(curBar.low);
+        const curRange = curHigh - curLow;
+        const curUpperWick = curHigh - Math.max(curOpen, curClose);
+        const curUpperWickRatio = curRange > 0 ? (curUpperWick / curRange) : 0;
+        const curBody = Math.abs(curClose - curOpen);
+        const curBodyRatio = curRange > 0 ? (curBody / curRange) : 0;
+
+        const prevOpen = Number(prevBar.open);
+        const prevClose = Number(prevBar.close);
+        const prevHigh = Number(prevBar.high);
+        const prevLow = Number(prevBar.low);
+        const prevRange = prevHigh - prevLow;
+        const prevUpperWick = prevHigh - Math.max(prevOpen, prevClose);
+        const prevUpperWickRatio = prevRange > 0 ? (prevUpperWick / prevRange) : 0;
+
+        // Check if market is in an aggressive vertical rocket rally
+        const isRocketRally = (
+          Number(prevBar.close) > Number(prevBar.open) &&
+          Number(prevBar2.close) > Number(prevBar2.open) &&
+          Number(prevBar3.close) > Number(prevBar3.open) &&
+          curClose > curOpen
+        );
+
+        // Check if current or previous completed bar shows genuine seller absorption / rejection
+        const hasRejectionWick = curUpperWickRatio >= 0.25 || prevUpperWickRatio >= 0.30;
+        const isBearishCandle = curClose < curOpen || (prevClose < prevOpen && curClose <= prevHigh);
+        const isBullishMarubozu = curClose > curOpen && curBodyRatio >= 0.60 && curUpperWickRatio < 0.15;
+
+        // Valid Rally Short requires:
+        // 1. Not in a 4-bar consecutive rocket rally
+        // 2. Not a pumping bullish marubozu
+        // 3. Demonstrates seller responsiveness (upper rejection wick >= 25% OR bearish reversal candle)
+        if (!isRocketRally && !isBullishMarubozu && (hasRejectionWick || isBearishCandle)) {
+          signalAction = 'SELL';
+          setupName = 'Bearish EMA 20 Pullback Rally (Confirmed Rejection)';
+          patternConfirmed = true;
+        } else {
+          console.log(`🛡️ [Crypto Anti-Falling-Knife] ${symbol} SELL Rally ข้ามคำสั่ง: แท่งเทียนยังไม่ยืนยันการกดกลับ (Rocket: ${isRocketRally}, Marubozu: ${isBullishMarubozu}, Wick: ${(curUpperWickRatio * 100).toFixed(0)}%, Bearish: ${isBearishCandle})`);
+        }
       }
     }
 
@@ -525,59 +787,162 @@ export async function executeCryptoScanCycle() {
     }
 
     const aiRes = await predictCryptoConfidence(cryptoFeatures);
-    const confidence = aiRes?.confidence || 0.60;
-
-    console.log(`🪙 [Crypto Signal Found] ${symbol} ${signalAction} | Setup: ${setupName} | Confidence: ${(confidence * 100).toFixed(1)}% | Price: $${lastClose.toFixed(cfg.digits)}`);
-
-    if (confidence < CRYPTO_CONFIDENCE_THRESHOLD) {
-      console.log(`🛡️ [Crypto Gating] ${symbol} ความมั่นใจ ${(confidence * 100).toFixed(1)}% < ${CRYPTO_CONFIDENCE_THRESHOLD * 100}% -> ข้ามคำสั่ง`);
-      scanResults.push({ symbol, status: 'LOW_CONFIDENCE', confidence });
+    if (aiRes?.modelAvailable === false) {
+      console.warn(`[Crypto Model Gate] ${symbol}: Python model unavailable; skipping this live candidate`);
+      scanResults.push({ symbol, status: 'MODEL_UNAVAILABLE', error: aiRes.error || null });
       continue;
     }
+    const rawBaseConfidence = aiRes?.confidence || 0.60;
+    const rawBaseScore = signalAction === 'BUY'
+      ? Number(aiRes?.raw_buy ?? aiRes?.prob_buy ?? rawBaseConfidence)
+      : Number(aiRes?.raw_sell ?? aiRes?.prob_sell ?? rawBaseConfidence);
 
-    // 1.5 Calibrated Raw Probability Floor Guard
-    const rawScore = signalAction === 'BUY'
-      ? Number(aiRes?.raw_buy ?? aiRes?.prob_buy ?? confidence)
-      : Number(aiRes?.raw_sell ?? aiRes?.prob_sell ?? confidence);
+    // =========================================================================
+    // Dynamic Modulation Pipeline (Aligns with Forex Pattern & Pressure Engine)
+    // Step 1: Technical & Pattern Signal Filter (Base Modifier)
+    // Step 2: Market Pressure Confirmation (+/- Modifier)
+    // Step 3: Modulate Confidence & Raw Directional Conviction Score
+    // =========================================================================
+    let patternBonus = 0;
+    const filterReasons = [];
 
-    if (rawScore < CRYPTO_RAW_SCORE_THRESHOLD) {
-      console.log(`🛡️ [Crypto Raw Conviction Guard] ${symbol} ${signalAction}: ความมั่นใจแท้จริง ${(rawScore * 100).toFixed(1)}% < ${(CRYPTO_RAW_SCORE_THRESHOLD * 100).toFixed(1)}% -> ข้ามคำสั่ง`);
-      scanResults.push({ symbol, status: 'LOW_RAW_CONVICTION', rawScore });
-      continue;
+    // Pattern 1: Compression Squeeze Breakout Bonus (+5%)
+    if (isBbSqueeze) {
+      patternBonus += 0.05;
+      filterReasons.push('Compression Squeeze Breakout (+5% Conf)');
     }
 
-    // 1.6 Wick Rejection Guard (Prevent buying tops / selling bottoms with >= 45% wick)
+    // Pattern 2: Overextension Guard (-5% penalty if price is stretched at swing extremes)
+    const isOverextended = (signalAction === 'BUY' && distanceToSwingHighLow >= 0.90)
+      || (signalAction === 'SELL' && distanceToSwingHighLow <= 0.10);
+    if (isOverextended) {
+      patternBonus -= 0.05;
+      filterReasons.push(`Overextended at swing extreme (distance ${(distanceToSwingHighLow * 100).toFixed(0)}%) (-5% Conf)`);
+    }
+
+    // Pattern 3: Wick Rejection Filter (-15% penalty instead of blunt hard-veto)
     if (CRYPTO_REJECTION_FILTER_ENABLED) {
       const rejectionCheck = checkRejectionCandle(m5Bars, signalAction, atr);
       if (rejectionCheck.hasRejection) {
-        console.log(`🛡️ [Crypto Rejection Guard] ${symbol} ${signalAction}: ${rejectionCheck.reason} -> ข้ามคำสั่งป้องกัน Stop Hunt`);
-        scanResults.push({ symbol, status: 'REJECTION_VETO', reason: rejectionCheck.reason });
-        continue;
+        patternBonus -= 0.15;
+        filterReasons.push(`Fake Signal Trap / Rejection Wick: ${rejectionCheck.reason} (-15% Conf)`);
+        console.log(`⚠️ [Crypto Rejection Filter] ${symbol} ${signalAction}: ${rejectionCheck.reason} (-15% Conf)`);
       }
+    }
+
+    // Pattern 4: Reversal Trap Guard (Divergence, SFP, Reversal Candlesticks)
+    try {
+      const rsiCalc = RSI.calculate({ period: 14, values: m5Bars.map(b => Number(b.close)) });
+      const reversalCheck = checkComprehensiveReversal(m5Bars, { rsiSeries: rsiCalc }, signalAction);
+      if (reversalCheck.hasOpposingReversal) {
+        patternBonus -= reversalCheck.confidencePenalty;
+        filterReasons.push(`Opposing Reversal Trap: ${reversalCheck.reason} (-${(reversalCheck.confidencePenalty * 100).toFixed(0)}% Conf)`);
+        console.log(`🚨 [Crypto Reversal Trap] ${symbol} ${signalAction}: ${reversalCheck.reason} (-${(reversalCheck.confidencePenalty * 100).toFixed(0)}% Conf)`);
+      }
+    } catch {}
+
+    // Step 2: Market Pressure Confirmation (+/- Modifier)
+    let pressureDelta = 0;
+    let pressureReason = '';
+    const pBuy = Number(marketPressure?.probabilities?.buy_pressure || 0);
+    const pSell = Number(marketPressure?.probabilities?.sell_pressure || 0);
+    const pChop = Number(marketPressure?.probabilities?.indecision || 0);
+
+    const counterThreshold = Number(process.env.CRYPTO_PRESSURE_COUNTER_THRESHOLD || 0.42);
+    const chopThreshold = Number(process.env.CRYPTO_PRESSURE_CHOP_THRESHOLD || 0.48);
+
+    const isCounterPressure = (signalAction === 'BUY' && (pSell >= counterThreshold || marketPressure?.state === 'SELL_PRESSURE'))
+      || (signalAction === 'SELL' && (pBuy >= counterThreshold || marketPressure?.state === 'BUY_PRESSURE'));
+    const isIndecisionChop = marketPressure?.state === 'INDECISION_CHOP' || pChop >= chopThreshold;
+
+    if (CRYPTO_MARKET_PRESSURE_ENABLED && marketPressure) {
+      if (signalAction === 'BUY') {
+        if (marketPressure.state === 'BUY_PRESSURE') {
+          pressureDelta = 0.08 + Math.min(0.06, Math.max(0, (pBuy - 0.40) * 0.5)); // +8% to +14%
+          pressureReason = `🟢 Market Pressure ยืนยันแรงซื้อ BUY_PRESSURE (${(pBuy * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +${(pressureDelta * 100).toFixed(1)}%`;
+        } else if (pBuy > pSell && pBuy >= 0.35 && marketPressure.state !== 'SELL_PRESSURE') {
+          pressureDelta = 0.04;
+          pressureReason = `🟢 Market Pressure โอนเอียงฝั่งซื้อ (${(pBuy * 100).toFixed(0)}% > ${(pSell * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +4.0%`;
+        } else if (isCounterPressure) {
+          pressureDelta = -0.25;
+          pressureReason = `🔴 Counter-Pressure ตรวจพบแรงฝั่งตรงข้ามสวนมา (${(pSell * 100).toFixed(0)}%) -> ลดความมั่นใจ -25.0%`;
+        } else if (isIndecisionChop) {
+          const chopWeight = Math.min(0.08, Math.max(0, (pChop - 0.35) * 0.5));
+          pressureDelta = -(0.08 + chopWeight); // -8% to -16%
+          pressureReason = `🟡 Market Pressure สภาวะ INDECISION_CHOP (${(pChop * 100).toFixed(0)}% ไร้แรงขับเคลื่อน) -> ปรับลดความมั่นใจ -${(Math.abs(pressureDelta) * 100).toFixed(1)}%`;
+        }
+      } else if (signalAction === 'SELL') {
+        if (marketPressure.state === 'SELL_PRESSURE') {
+          pressureDelta = 0.08 + Math.min(0.06, Math.max(0, (pSell - 0.40) * 0.5)); // +8% to +14%
+          pressureReason = `🔴 Market Pressure ยืนยันแรงขาย SELL_PRESSURE (${(pSell * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +${(pressureDelta * 100).toFixed(1)}%`;
+        } else if (pSell > pBuy && pSell >= 0.35 && marketPressure.state !== 'BUY_PRESSURE') {
+          pressureDelta = 0.04;
+          pressureReason = `🔴 Market Pressure โอนเอียงฝั่งขาย (${(pSell * 100).toFixed(0)}% > ${(pBuy * 100).toFixed(0)}%) -> เพิ่มความมั่นใจ +4.0%`;
+        } else if (isCounterPressure) {
+          pressureDelta = -0.25;
+          pressureReason = `🔴 Counter-Pressure ตรวจพบแรงฝั่งตรงข้ามสวนมา (${(pBuy * 100).toFixed(0)}%) -> ลดความมั่นใจ -25.0%`;
+        } else if (isIndecisionChop) {
+          const chopWeight = Math.min(0.08, Math.max(0, (pChop - 0.35) * 0.5));
+          pressureDelta = -(0.08 + chopWeight); // -8% to -16%
+          pressureReason = `🟡 Market Pressure สภาวะ INDECISION_CHOP (${(pChop * 100).toFixed(0)}% ไร้แรงขับเคลื่อน) -> ปรับลดความมั่นใจ -${(Math.abs(pressureDelta) * 100).toFixed(1)}%`;
+        }
+      }
+    }
+
+    // Step 3: Modulate Confidence & Raw Score proportionally
+    const netDelta = pressureDelta + patternBonus;
+    const confidence = Number(Math.min(0.98, Math.max(0.05, rawBaseConfidence + netDelta)).toFixed(4));
+    const pressureMultiplier = 1 + (netDelta / Math.max(0.20, rawBaseConfidence));
+    const rawScore = Number(Math.min(0.95, Math.max(0.01, rawBaseScore * pressureMultiplier)).toFixed(4));
+
+    console.log(`🎯 [Crypto Confidence Modulation] ${symbol} ${signalAction} | Setup: ${setupName} | Base: ${(rawBaseConfidence * 100).toFixed(1)}% (${netDelta >= 0 ? '+' : ''}${(netDelta * 100).toFixed(1)}%) -> Modulated: ${(confidence * 100).toFixed(1)}% | Raw Score: ${rawBaseScore.toFixed(4)} -> ${rawScore.toFixed(4)} | Price: $${lastClose.toFixed(cfg.digits)}`);
+    if (pressureReason) {
+      console.log(`   └─ ${pressureReason}`);
+    }
+
+    if (confidence < CRYPTO_CONFIDENCE_THRESHOLD) {
+      console.log(`🛡️ [Crypto Gating] ${symbol} ความมั่นใจ ${(confidence * 100).toFixed(1)}% < ${CRYPTO_CONFIDENCE_THRESHOLD * 100}% (หลังคำนวณ Market Pressure +/-) -> ข้ามคำสั่ง`);
+      scanResults.push({ symbol, status: 'LOW_CONFIDENCE', confidence, netDelta });
+      continue;
+    }
+
+    if (rawScore < CRYPTO_RAW_SCORE_THRESHOLD) {
+      console.log(`🛡️ [Crypto Raw Conviction Guard] ${symbol} ${signalAction}: ความมั่นใจแท้จริง ${(rawScore * 100).toFixed(1)}% < ${(CRYPTO_RAW_SCORE_THRESHOLD * 100).toFixed(1)}% (หลังคำนวณ Market Pressure +/-) -> ข้ามคำสั่ง`);
+      scanResults.push({ symbol, status: 'LOW_RAW_CONVICTION', rawScore, netDelta });
+      continue;
+    }
+
+    // Safety Shield: Extreme Counter-Pressure veto (> 45% opposing push)
+    if (isCounterPressure && (signalAction === 'BUY' ? pSell >= 0.45 : pBuy >= 0.45)) {
+      console.log(`🛡️ [Crypto Counter-Pressure Shield] ${symbol} ${signalAction}: ตรวจพบแรงฝั่งตรงข้ามสวนมารุนแรง (${signalAction === 'BUY' ? `Sell ${(pSell*100).toFixed(0)}%` : `Buy ${(pBuy*100).toFixed(0)}%`} >= 45%) -> สกัดกั้นคำสั่งเพื่อความปลอดภัย`);
+      scanResults.push({ symbol, status: 'COUNTER_PRESSURE_BLOCKED', pBuy, pSell });
+      continue;
     }
 
     // Dynamic Exit Geometry Check: S/R distance & Risk-to-Reward evaluation
     const slMult = Number(process.env.CRYPTO_SL_ATR_MULT || 1.8);
-    const tpMult = Number(process.env.CRYPTO_TP_ATR_MULT || 2.8);
+    const tpMult = Number(process.env.CRYPTO_TP_ATR_MULT || 3.0);
     const slBuffer = Math.max(cfg.minSlBuffer, Number((slMult * atr).toFixed(cfg.digits)));
     const defaultTpBuffer = Number((tpMult * atr).toFixed(cfg.digits));
 
+    const minCryptoRr = Number(process.env.CRYPTO_MIN_RISK_REWARD || 1.20);
+
     if (signalAction === 'BUY') {
       const distToRes = resistancePrice - lastClose;
-      if (distToRes > 0 && distToRes < defaultTpBuffer * 0.6) {
+      if (distToRes > 0 && distToRes < defaultTpBuffer * 0.75) {
         const potentialRr = distToRes / slBuffer;
-        if (potentialRr < 0.70) {
-          console.log(`🛡️ [Crypto Exit Geometry] ${symbol} BUY: แนวต้านใกล้เกินไป (${distToRes.toFixed(cfg.digits)}) | R:R ต่ำเกณฑ์ (${potentialRr.toFixed(2)} < 1:0.70) -> ข้าม`);
+        if (potentialRr < minCryptoRr) {
+          console.log(`🛡️ [Crypto Exit Geometry] ${symbol} BUY: แนวต้านใกล้เกินไป (${distToRes.toFixed(cfg.digits)}) | R:R ต่ำเกณฑ์ (${potentialRr.toFixed(2)} < 1:${minCryptoRr.toFixed(2)}) -> ข้าม`);
           scanResults.push({ symbol, status: 'LOW_RR_SKIP', rr: potentialRr });
           continue;
         }
       }
     } else if (signalAction === 'SELL') {
       const distToSup = lastClose - supportPrice;
-      if (distToSup > 0 && distToSup < defaultTpBuffer * 0.6) {
+      if (distToSup > 0 && distToSup < defaultTpBuffer * 0.75) {
         const potentialRr = distToSup / slBuffer;
-        if (potentialRr < 0.70) {
-          console.log(`🛡️ [Crypto Exit Geometry] ${symbol} SELL: แนวรับใกล้เกินไป (${distToSup.toFixed(cfg.digits)}) | R:R ต่ำเกณฑ์ (${potentialRr.toFixed(2)} < 1:0.70) -> ข้าม`);
+        if (potentialRr < minCryptoRr) {
+          console.log(`🛡️ [Crypto Exit Geometry] ${symbol} SELL: แนวรับใกล้เกินไป (${distToSup.toFixed(cfg.digits)}) | R:R ต่ำเกณฑ์ (${potentialRr.toFixed(2)} < 1:${minCryptoRr.toFixed(2)}) -> ข้าม`);
           scanResults.push({ symbol, status: 'LOW_RR_SKIP', rr: potentialRr });
           continue;
         }
@@ -639,13 +1004,34 @@ export async function executeCryptoScanCycle() {
       console.log(`📈 [Crypto Scale-In / Re-Entry] ${symbol} ${signalAction} | ไม้ที่ ${currentActiveCount + 1}/${CRYPTO_MAX_POSITIONS_PER_SYMBOL} | Setup: ${setupName} | Confidence: ${(confidence * 100).toFixed(1)}%`);
     }
 
-    // Calculate SL/TP with ATR Buffers
+    // Calculate SL/TP with ATR Buffers & Smart Structural TP Capping
+    let tpBuffer = defaultTpBuffer;
+    if (signalAction === 'BUY' && resistancePrice > lastClose) {
+      const safeDistToRes = Math.max(0, (resistancePrice - lastClose) - (0.20 * atr));
+      if (safeDistToRes > 0 && safeDistToRes < tpBuffer) {
+        const potentialRr = safeDistToRes / slBuffer;
+        if (potentialRr >= minCryptoRr) {
+          tpBuffer = Number(safeDistToRes.toFixed(cfg.digits));
+          console.log(`🎯 [Crypto Smart TP Cap] ${symbol} BUY: ดักล็อกเป้าหมายหน้าแนวต้าน ($${resistancePrice.toFixed(cfg.digits)}) -> ปรับ TP Buffer เหลือ $${tpBuffer.toFixed(cfg.digits)} (R:R 1:${potentialRr.toFixed(2)})`);
+        }
+      }
+    } else if (signalAction === 'SELL' && supportPrice < lastClose) {
+      const safeDistToSup = Math.max(0, (lastClose - supportPrice) - (0.20 * atr));
+      if (safeDistToSup > 0 && safeDistToSup < tpBuffer) {
+        const potentialRr = safeDistToSup / slBuffer;
+        if (potentialRr >= minCryptoRr) {
+          tpBuffer = Number(safeDistToSup.toFixed(cfg.digits));
+          console.log(`🎯 [Crypto Smart TP Cap] ${symbol} SELL: ดักล็อกเป้าหมายหน้าแนวรับ ($${supportPrice.toFixed(cfg.digits)}) -> ปรับ TP Buffer เหลือ $${tpBuffer.toFixed(cfg.digits)} (R:R 1:${potentialRr.toFixed(2)})`);
+        }
+      }
+    }
+
     let slPrice = signalAction === 'BUY'
       ? Number((lastClose - slBuffer).toFixed(cfg.digits))
       : Number((lastClose + slBuffer).toFixed(cfg.digits));
     let tpPrice = signalAction === 'BUY'
-      ? Number((lastClose + defaultTpBuffer).toFixed(cfg.digits))
-      : Number((lastClose - defaultTpBuffer).toFixed(cfg.digits));
+      ? Number((lastClose + tpBuffer).toFixed(cfg.digits))
+      : Number((lastClose - tpBuffer).toFixed(cfg.digits));
 
     const lotSize = Math.max(cfg.minLot, Number(process.env.CRYPTO_LOT_SIZE || cfg.minLot));
 
@@ -782,7 +1168,17 @@ export async function executeCryptoScanCycle() {
         predictionMeta: {
           feature_version: 'crypto16-v2',
           features: cryptoFeatures,
-          prediction: aiRes
+          prediction: aiRes,
+          modulation: {
+            rawBaseConfidence,
+            rawBaseScore,
+            patternBonus,
+            pressureDelta,
+            netDelta,
+            filterReasons,
+            modulatedConfidence: confidence,
+            modulatedRawScore: rawScore
+          }
         },
         sourceTag: 'crypto_engine'
       });

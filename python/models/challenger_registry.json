@@ -1,9 +1,9 @@
 {
-  "active_version": "challenger-v1.7.0",
+  "active_version": "challenger-v1.17.0",
   "model_source": "forex_challenger",
-  "created_at": "2026-09-18T21:40:30.853008",
+  "created_at": "2026-09-28T08:27:50.660904",
   "artifact": "forex_challenger_model.joblib",
-  "archive_artifact": "versions/forex_challenger_model_challenger-v1.7.0.joblib",
+  "archive_artifact": "versions/forex_challenger_model_challenger-v1.17.0.joblib",
   "architecture": "Dual GradientBoosting (BUY + SELL)",
   "features": [
     "ret_1",
@@ -21,14 +21,14 @@
     "spread_to_atr"
   ],
   "dataset": {
-    "total_samples": 80529,
-    "train_samples": 64423,
-    "test_samples": 16106,
-    "positive_rate_buy": 0.1016,
-    "positive_rate_sell": 0.1311,
-    "live_trade_samples": 1152,
-    "shadow_trade_samples": 1960,
-    "observation_samples": 4082,
+    "total_samples": 53551,
+    "train_samples": 43639,
+    "test_samples": 9912,
+    "positive_rate_buy": 0.058,
+    "positive_rate_sell": 0.1239,
+    "live_trade_samples": 0,
+    "shadow_trade_samples": 0,
+    "observation_samples": 4996,
     "source_mode": "trade_results_plus_observations",
     "mixed_sources": [
       [
@@ -47,14 +47,29 @@
         "CHALLENGER_SHADOW"
       ],
       [
-        "forex_champion",
-        "v1.4.0",
-        "CHAMPION_SHADOW"
+        "forex_challenger",
+        "challenger-v1.7.0",
+        "CHALLENGER_SHADOW"
+      ],
+      [
+        "forex_challenger",
+        "challenger-v1.7.0",
+        "LIVE"
+      ],
+      [
+        "forex_challenger",
+        "challenger-v1.7.0",
+        "POCKET_EXPLORE_SHADOW"
+      ],
+      [
+        "forex_challenger",
+        "challenger-v1.7.0",
+        "POCKET_PROD_SHADOW"
       ],
       [
         "forex_champion",
         "v1.4.0",
-        "LIVE"
+        "CHAMPION_SHADOW"
       ],
       [
         "forex_champion",
@@ -63,66 +78,52 @@
       ],
       [
         "forex_champion",
-        "v1.5.0",
-        "LIVE"
-      ],
-      [
-        "forex_champion",
         "v1.6.0",
         "CHAMPION_SHADOW"
-      ],
-      [
-        "forex_champion",
-        "v1.6.0",
-        "FOREX_SIGNAL_REENTRY"
-      ],
-      [
-        "forex_champion",
-        "v1.6.0",
-        "LIVE"
       ]
     ]
   },
   "metrics": {
     "buy": {
-      "threshold": 0.3721,
-      "accuracy": 0.8864,
-      "precision": 0.3996,
-      "recall": 0.2347,
-      "specificity": 0.9601,
-      "f1": 0.2957,
-      "f05": 0.3504,
-      "roc_auc": 0.8122,
-      "pr_auc": 0.2959,
-      "log_loss": 0.2677,
-      "brier": 0.0817,
-      "mcc": 0.2485,
+      "threshold": 0.1943,
+      "accuracy": 0.9297,
+      "precision": 0.2636,
+      "recall": 0.1183,
+      "specificity": 0.9797,
+      "f1": 0.1633,
+      "f05": 0.2116,
+      "roc_auc": 0.8112,
+      "pr_auc": 0.1815,
+      "log_loss": 0.1794,
+      "brier": 0.0506,
+      "mcc": 0.1438,
       "confusion_matrix": {
-        "tn": 13893,
-        "fp": 577,
-        "fn": 1252,
-        "tp": 384
+        "tn": 9147,
+        "fp": 190,
+        "fn": 507,
+        "tp": 68
       }
     },
     "sell": {
-      "threshold": 0.1939,
-      "accuracy": 0.7603,
-      "precision": 0.2853,
-      "recall": 0.5502,
-      "specificity": 0.792,
-      "f1": 0.3757,
-      "f05": 0.3157,
-      "roc_auc": 0.7838,
-      "pr_auc": 0.2665,
-      "log_loss": 0.3297,
-      "brier": 0.1085,
-      "mcc": 0.2657,
+      "threshold": 0.2198,
+      "accuracy": 0.7647,
+      "precision": 0.2923,
+      "recall": 0.6327,
+      "specificity": 0.7834,
+      "f1": 0.3999,
+      "f05": 0.3276,
+      "roc_auc": 0.8194,
+      "pr_auc": 0.3207,
+      "log_loss": 0.2795,
+      "brier": 0.0917,
+      "mcc": 0.3095,
       "confusion_matrix": {
-        "tn": 11083,
-        "fp": 2911,
-        "fn": 950,
-        "tp": 1162
+        "tn": 6803,
+        "fp": 1881,
+        "fn": 451,
+        "tp": 777
       }
     }
-  }
+  },
+  "previous_version": "challenger-v1.7.0"
 }

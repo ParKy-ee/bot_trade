@@ -371,6 +371,11 @@ export async function executeScanCycle(options = {}) {
     let aiConf = 0;
     try {
       const pred = await predictConfidence(row.features);
+      if (pred?.modelAvailable === false) {
+        console.warn(`[Stock Model Gate] ${symbol}: Python model unavailable; skipping this candidate`);
+        scanResults.push({ symbol, status: 'MODEL_UNAVAILABLE' });
+        continue;
+      }
       aiConf = Number(pred.confidence || 0);
     } catch (err) {
       console.warn(`⚠️ Prediction error for ${symbol}:`, err.message);

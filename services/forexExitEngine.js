@@ -5,6 +5,8 @@
  * modifies, or closes an order.
  */
 
+import { predictSmartEarlyCut } from './modelPredictor.js';
+
 function finiteNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -155,21 +157,23 @@ export function calculateDynamicForexExit({
   const pivotStrength = Math.max(1, Math.floor(Number(options.pivotStrength || 2)));
   const entryMode = String(options.entryMode || 'DEFAULT').toUpperCase();
   const dynamicTpMult = options.marketPressure?.pip_projections?.recommended_tp_atr_mult;
-  const dynamicSlMult = options.marketPressure?.pip_projections?.recommended_sl_atr_mult;
-  const tpAtrMult = Math.max(0.1, Number(options.tpAtrMult ?? dynamicTpMult ?? (entryMode === 'BREAKOUT' ? 1.8 : (entryMode === 'PULLBACK' ? 1.5 : 0.9))));
-  const slAtrMult = Math.max(0.1, Number(options.slAtrMult ?? dynamicSlMult ?? 0.8));
+  const tpAtrMult = Math.max(0.1, Number(options.tpAtrMult ?? dynamicTpMult ?? (entryMode === 'BREAKOUT' ? 1.8 : (entryMode === 'PULLBACK' ? 1.5 : 1.25))));
+  const slAtrMult = Math.max(0.1, Number(options.slAtrMult ?? dynamicSlMult ?? 0.85));
   const bufferAtrFraction = Math.max(0, Number(options.bufferAtrFraction ?? 0.1));
   const minBufferPips = Math.max(0, Number(options.minBufferPips ?? 1));
   const spreadPips = Math.max(0, Number(options.spreadPips || 0));
   const spreadBufferMultiplier = Math.max(0, Number(options.spreadBufferMultiplier ?? 1.5));
-  const minTpPips = Math.max(0, Number(options.minTpPips ?? (isJpy ? 10 : 6)));
-  const minSlPips = Math.max(0, Number(options.minSlPips ?? (isJpy ? 14 : 6)));
+  const minTpPips = Math.max(0, Number(options.minTpPips ?? (isJpy ? 10.0 : 7.5)));
+  const minSlPips = Math.max(0, Number(options.minSlPips ?? (isJpy ? 9.0 : 7.0)));
   const tpMultiplier = Math.min(
     1,
     Math.max(0.1, Number(options.tpMultiplier ?? 1))
   );
   const minBrokerDistancePips = Math.max(0, Number(options.minBrokerDistancePips || 0));
-  const minRiskReward = Math.max(0, Number(options.minRiskReward ?? (entryMode === 'BREAKOUT' ? 1.3 : 1.15)));
+  // A configured floor below 1.15 allows a sub-1:1 trade to pass despite the
+  // strategy's recent realized win rate being well below its break-even level.
+  const configuredMinRiskReward = finiteNumber(options.minRiskReward ?? (entryMode === 'BREAKOUT' ? 1.3 : 1.15));
+  const minRiskReward = Math.max(1.15, configuredMinRiskReward ?? 1.15);
 
   const swings = findForexSwingLevels(bars, { lookbackBars, pivotStrength });
   const resistance = nearestResistance(swings.pivotHighs, entry) ?? (
@@ -224,8 +228,9 @@ export function calculateDynamicForexExit({
       .filter((value) => Number.isFinite(value) && value > 0);
     rawTpPips = targetCandidates.length ? Math.min(...targetCandidates) : atrTargetPips;
   } else if (Number.isFinite(structureTargetPips) && structureTargetPips > 0) {
-    // In trend modes, target ATR expansion or up to distant structure
-    rawTpPips = Math.max(atrTargetPips, Math.min(structureTargetPips, atrTargetPips * 1.5));
+    // Smart Structural TP Cap: Cap realistic TP at or before the structure barrier (resistance for BUY, support for SELL)
+    // rather than forcing Math.max(atrTargetPips, ...) which throws TP beyond the wall!
+    rawTpPips = Math.min(atrTargetPips, structureTargetPips);
   }
   const tpPips = rawTpPips * tpMultiplier;
   const effectiveStructureStopPips = Number.isFinite(structureStopPips) && structureStopPips > 0
@@ -290,22 +295,25 @@ export function calculateDynamicForexExit({
 
 /**
  * Evaluates whether an open position should be closed early due to adverse Market Pressure
- * (Tier 1: Profit Lock or Tier 2: Early Cut / Loss Minimizer).
+ * (Tier 1: Profit Lock or Tier 2: ML-Powered Smart Early Cut).
  */
-export function evaluateAdversePressureExit({
+export async function evaluateAdversePressureExit({
   action,
   currClose,
   entryPrice,
   pipSize,
   marketPressure,
-  holdMinutes = 0
+  holdMinutes = 0,
+  slPrice = null,
+  tpPrice = null,
+  bars = []
 } = {}) {
   const isEnabled = process.env.FOREX_PRESSURE_EXIT_ENABLED !== 'false';
   if (!isEnabled || !marketPressure || !marketPressure.probabilities) {
     return { shouldExit: false };
   }
 
-  const minHoldMinutes = Number(process.env.FOREX_PRESSURE_MIN_HOLD_MINUTES || 3);
+  const minHoldMinutes = Number(process.env.FOREX_PRESSURE_MIN_HOLD_MINUTES || 7);
   if (holdMinutes < minHoldMinutes) {
     return { shouldExit: false };
   }
@@ -326,36 +334,219 @@ export function evaluateAdversePressureExit({
   const expNetPips = Number(marketPressure.pip_projections?.expected_net_pips || 0);
   const adverseFlowPips = isBuy ? -expNetPips : expNetPips; // positive means moving against our position
 
-  // Tier 1: Profit Lock (Positive floating pips >= profitLockMinPips, and adverse pressure pushes against us)
-  // Lock in gains before price drops back to breakeven or into loss!
-  const profitLockMinPips = Number(process.env.FOREX_PRESSURE_PROFIT_LOCK_PIPS || 1.0);
-  const adverseThreshold = Number(process.env.FOREX_PRESSURE_ADVERSE_THRESHOLD || 0.45);
+  // Tier 1: Smart Profit Protection (Replaces naive 1-pip cut)
+  // In M5 trading, minor pullbacks in early profit (< 4.5 pips or < 45% TP) are normal continuation noise.
+  // Prematurely cutting at +1.0 pips loses 56% of big winners that go on to hit full TP.
+  // Therefore, only consider active Profit Lock if:
+  // 1) Position achieved substantial profit (>= 4.5 pips or >= 45% TP distance)
+  // 2) Strong adverse reversal is confirmed (adverseProb >= 0.60, adverseState, adverseFlowPips >= 2.0)
+  const tp_p_tier1 = Number(tpPrice);
+  const tp_total_pips_tier1 = (tp_p_tier1 && entryPrice) ? Math.abs(tp_p_tier1 - entryPrice) / pipSize : 15.0;
+  const profitLockMinPips = Math.max(
+    Number(process.env.FOREX_PRESSURE_PROFIT_LOCK_PIPS || 4.5),
+    0.45 * tp_total_pips_tier1
+  );
+  const adverseThreshold = Number(process.env.FOREX_PRESSURE_ADVERSE_THRESHOLD || 0.60);
 
-  if (profitPips >= profitLockMinPips && (adverseProb >= adverseThreshold || (adverseState && adverseProb >= 0.40))) {
+  if (profitPips >= profitLockMinPips && adverseProb >= adverseThreshold && adverseState && adverseFlowPips >= 2.0) {
     return {
       shouldExit: true,
       exitReason: 'CLOSED_PRESSURE_PROFIT_LOCK',
       profitPips: Number(profitPips.toFixed(2)),
       adverseProb,
       adverseFlowPips: Number(adverseFlowPips.toFixed(2)),
-      reason: `พบแรงสวนทาง ${(adverseProb * 100).toFixed(0)}% (${isBuy ? 'Sell' : 'Buy'} Pressure) ขณะมีกำไร +${profitPips.toFixed(1)} pips -> ปิดล็อกกำไรทันที!`
+      reason: `ตรวจพบแรงต้านกลับตัวรุนแรง ${(adverseProb * 100).toFixed(0)}% (${isBuy ? 'Sell' : 'Buy'} Pressure Flow: ${adverseFlowPips.toFixed(1)}p) ขณะมีกำไรก้อนใหญ่ +${profitPips.toFixed(1)} pips -> ปิดล็อกกำไรเพื่อป้องกันกำไรหดตัว!`
     };
   }
 
-  // Tier 2: Early Cut / Loss Minimizer (Negative floating pips, but way before full Hard SL)
-  // If floating between -1.5 and -8.0 pips, and adverse pressure confirms strong reversal
-  const earlyCutTriggerPips = Number(process.env.FOREX_PRESSURE_EARLY_CUT_PIPS || -1.5);
-  const severeAdverseThreshold = Number(process.env.FOREX_PRESSURE_SEVERE_THRESHOLD || 0.48);
+  // Tier 2: ML-Powered Smart Early Cut (Only when position is in adverse drawdown)
+  // Replaces the naive 1-bar heuristic with the trained SECRC Trajectory & Rebound Ensemble.
+  // Objective: Protect >90% of pullbacks that rebound to TP, and only cut fatal collapses.
+  const earlyCutTriggerPips = Number(process.env.FOREX_PRESSURE_EARLY_CUT_PIPS || -5.0);
 
-  if (profitPips <= earlyCutTriggerPips && (adverseProb >= severeAdverseThreshold || (adverseState && adverseFlowPips >= 0.5))) {
-    return {
-      shouldExit: true,
-      exitReason: 'CLOSED_PRESSURE_EARLY_CUT',
-      profitPips: Number(profitPips.toFixed(2)),
-      adverseProb,
-      adverseFlowPips: Number(adverseFlowPips.toFixed(2)),
-      reason: `พบแรงสวนรุนแรง ${(adverseProb * 100).toFixed(0)}% (${isBuy ? 'Sell' : 'Buy'} Pressure Flow: ${adverseFlowPips.toFixed(1)}p) ขณะติดลบ ${profitPips.toFixed(1)} pips -> ชิงตัดขาดทุนทิ้ง เซฟระยะก่อนโดน Hard SL!`
-    };
+  if (profitPips <= earlyCutTriggerPips) {
+    try {
+      const lastBar = (bars && bars.length > 0) ? bars[bars.length - 1] : {};
+      const open_p = Number(lastBar.open) || currClose;
+      const close_p = currClose;
+      const high_p = Number(lastBar.high) || Math.max(open_p, close_p);
+      const low_p = Number(lastBar.low) || Math.min(open_p, close_p);
+      const c_range = Math.max(pipSize * 0.1, high_p - low_p);
+
+      const candle_body = (close_p - open_p) / c_range;
+      const adverse_body = isBuy ? -candle_body : candle_body;
+
+      const upper_wick = (high_p - Math.max(open_p, close_p)) / c_range;
+      const lower_wick = (Math.min(open_p, close_p) - low_p) / c_range;
+
+      const rejection_wick = isBuy ? lower_wick : upper_wick;
+      const adverse_wick = isBuy ? upper_wick : lower_wick;
+      const wick_asym = rejection_wick - adverse_wick;
+
+      const sl_p = Number(slPrice);
+      const tp_p = Number(tpPrice);
+      const sl_total_pips = (sl_p && entryPrice) ? Math.abs(entryPrice - sl_p) / pipSize : 15.0;
+      const tp_total_pips = (tp_p && entryPrice) ? Math.abs(tp_p - entryPrice) / pipSize : 15.0;
+
+      const dist_to_sl_pips = sl_p ? (isBuy ? (currClose - sl_p) / pipSize : (sl_p - currClose) / pipSize) : sl_total_pips * 0.5;
+      const dist_to_tp_pips = tp_p ? (isBuy ? (tp_p - currClose) / pipSize : (currClose - tp_p) / pipSize) : tp_total_pips;
+
+      const sl_room_ratio = Math.min(1.0, Math.max(0.0, dist_to_sl_pips / Math.max(0.1, sl_total_pips)));
+      const tp_dist_ratio = Math.min(3.0, Math.max(0.0, dist_to_tp_pips / Math.max(0.1, tp_total_pips)));
+
+      const atr_pips = lastBar.atr ? Math.max(1.0, Number(lastBar.atr) / pipSize) : (marketPressure.atr_pips || 8.0);
+      const drawdown_pips = Math.abs(profitPips);
+
+      const features = {
+        floating_pips: Number(profitPips.toFixed(2)),
+        drawdown_to_atr: Number(Math.min(5.0, Math.max(0.0, drawdown_pips / atr_pips)).toFixed(4)),
+        sl_room_ratio: Number(sl_room_ratio.toFixed(4)),
+        tp_dist_ratio: Number(tp_dist_ratio.toFixed(4)),
+        adverse_body: Number(Math.min(1.0, Math.max(-1.0, adverse_body)).toFixed(4)),
+        rejection_wick: Number(Math.min(1.0, Math.max(0.0, rejection_wick)).toFixed(4)),
+        adverse_wick: Number(Math.min(1.0, Math.max(0.0, adverse_wick)).toFixed(4)),
+        wick_asym: Number(Math.min(1.0, Math.max(-1.0, wick_asym)).toFixed(4)),
+        rsi: Number(lastBar.rsi || 50.0),
+        atr_pips: Number(atr_pips.toFixed(2)),
+        bar_index: Math.max(1, Math.round(holdMinutes / 5))
+      };
+
+      const mlCut = await predictSmartEarlyCut(features);
+      // Anti-Premature Cut Guard: Only cut when in true adverse distress
+      // 1. Drawdown must exceed -5.0 pips (or 0.70x ATR)
+      // 2. SL room ratio must be <= 0.35 (actually approaching the stop loss, not floating safely)
+      // 3. Trade held for at least 10 minutes (2 M5 bars)
+      const isSevereDrawdown = profitPips <= Math.min(-5.0, -0.70 * atr_pips);
+      const isSlEndangered = sl_room_ratio <= 0.35;
+      const isHeldLongEnough = holdMinutes >= 10;
+
+      if (mlCut && mlCut.should_cut && isSevereDrawdown && isSlEndangered && isHeldLongEnough) {
+        return {
+          shouldExit: true,
+          exitReason: 'CLOSED_PRESSURE_EARLY_CUT',
+          profitPips: Number(profitPips.toFixed(2)),
+          adverseProb,
+          adverseFlowPips: Number(adverseFlowPips.toFixed(2)),
+          collapseProb: mlCut.collapse_prob,
+          reboundProb: mlCut.rebound_prob,
+          reason: `ML Smart Cut: ตรวจพบโครงสร้างพังทลายแท้จริง (Collapse ${(mlCut.collapse_prob * 100).toFixed(1)}% >= ${(mlCut.threshold_used * 100).toFixed(0)}%, SL Room ${(sl_room_ratio * 100).toFixed(0)}%) ขณะติดลบ ${profitPips.toFixed(1)} pips -> ชิงตัดขาดทุนทิ้งแม่นยำ!`
+        };
+      } else if (mlCut) {
+        if (profitPips <= -3.5) {
+          console.log(`🛡️ [ML SMART CUT PROTECT] ${isBuy ? 'BUY' : 'SELL'} drawdown ${profitPips.toFixed(1)}p: Rebound Prob ${(mlCut.rebound_prob * 100).toFixed(1)}% (SL Room ${(sl_room_ratio * 100).toFixed(0)}% | Distress: ${isSevereDrawdown && isSlEndangered}) -> HOLD normal pullback!`);
+        }
+      }
+    } catch (mlErr) {
+      console.warn('⚠️ [evaluateAdversePressureExit] ML evaluation failed, holding position:', mlErr.message);
+    }
+  }
+
+  return { shouldExit: false };
+}
+
+/**
+ * Evaluates whether an open position has reached a structural S/R barrier in profit
+ * and exhibited rejection price action (wick rejection or candle pullback),
+ * indicating that price is failing to pierce through and should be harvested immediately
+ * to protect profit and prevent adverse reversal.
+ */
+export function evaluateSrRejectionHarvest({
+  action,
+  currentPrice,
+  entryPrice,
+  bars = [],
+  atr,
+  pipSize = 1.0,
+  holdMinutes = 0,
+  minProfitAtrMult = 0.45,
+  minHoldMinutes = 5
+} = {}) {
+  const isEnabled = process.env.SR_REJECTION_HARVEST_ENABLED !== 'false';
+  if (!isEnabled) return { shouldExit: false };
+
+  const isBuy = String(action || '').toUpperCase().includes('BUY');
+  const entry = Number(entryPrice);
+  const curr = Number(currentPrice);
+  const currentAtr = Number(atr);
+
+  if (!entry || !curr || !currentAtr || currentAtr <= 0) {
+    return { shouldExit: false };
+  }
+
+  if (holdMinutes < minHoldMinutes) {
+    return { shouldExit: false };
+  }
+
+  const profitDistance = isBuy ? (curr - entry) : (entry - curr);
+  const minProfitDistance = minProfitAtrMult * currentAtr;
+
+  // Must have achieved sufficient baseline profit (>= 0.45x ATR)
+  if (profitDistance < minProfitDistance) {
+    return { shouldExit: false };
+  }
+
+  if (!bars || bars.length < 10) {
+    return { shouldExit: false };
+  }
+
+  const lastBar = bars[bars.length - 1];
+  const completedBars = bars.slice(0, -1);
+  const refBars = (completedBars.length >= 12 ? completedBars : bars).slice(-24);
+
+  if (refBars.length < 5) {
+    return { shouldExit: false };
+  }
+
+  const swingHigh = Math.max(...refBars.map(b => Number(b.high)));
+  const swingLow = Math.min(...refBars.map(b => Number(b.low)));
+
+  const h = Number(lastBar.high);
+  const l = Number(lastBar.low);
+  const c = Number(lastBar.close);
+  const o = Number(lastBar.open);
+  const barRange = Math.max(pipSize * 0.1, h - l);
+
+  const wickRatioMin = Number(process.env.SR_REJECTION_WICK_RATIO || 0.25);
+  const pullbackAtrMin = Number(process.env.SR_REJECTION_PULLBACK_ATR || 0.25) * currentAtr;
+
+  if (isBuy) {
+    // BUY: Approaching or touching resistance (within 0.35x ATR)
+    const nearResistance = h >= swingHigh - (0.35 * currentAtr);
+    const upperWickRatio = (h - Math.max(o, c)) / barRange;
+    const pulledBackFromHigh = (h - curr) >= pullbackAtrMin || (h - c) >= pullbackAtrMin;
+    const isRedReversal = c < o && h >= swingHigh - (0.15 * currentAtr);
+
+    if (nearResistance && (upperWickRatio >= wickRatioMin || pulledBackFromHigh || isRedReversal)) {
+      const profitPips = pipSize > 0 ? profitDistance / pipSize : profitDistance;
+      const pullbackDist = h - curr;
+      return {
+        shouldExit: true,
+        exitReason: 'CLOSED_SR_REJECTION_HARVEST',
+        profitPips: Number(profitPips.toFixed(2)),
+        profitDistance,
+        srLevel: swingHigh,
+        reason: `BUY Resistance Rejection @ ${swingHigh.toFixed(5)} (Wick: ${(upperWickRatio * 100).toFixed(0)}%, Pullback: ${pullbackDist.toFixed(5)}) ขณะมีกำไร +${profitPips.toFixed(1)} -> ล็อกกำไรทันทีก่อนราคาย่อตัว!`
+      };
+    }
+  } else {
+    // SELL: Approaching or touching support (within 0.35x ATR)
+    const nearSupport = l <= swingLow + (0.35 * currentAtr);
+    const lowerWickRatio = (Math.min(o, c) - l) / barRange;
+    const pulledBackFromLow = (curr - l) >= pullbackAtrMin || (c - l) >= pullbackAtrMin;
+    const isGreenReversal = c > o && l <= swingLow + (0.15 * currentAtr);
+
+    if (nearSupport && (lowerWickRatio >= wickRatioMin || pulledBackFromLow || isGreenReversal)) {
+      const profitPips = pipSize > 0 ? profitDistance / pipSize : profitDistance;
+      const bounceDist = curr - l;
+      return {
+        shouldExit: true,
+        exitReason: 'CLOSED_SR_REJECTION_HARVEST',
+        profitPips: Number(profitPips.toFixed(2)),
+        profitDistance,
+        srLevel: swingLow,
+        reason: `SELL Support Rejection @ ${swingLow.toFixed(5)} (Wick: ${(lowerWickRatio * 100).toFixed(0)}%, Bounce: ${bounceDist.toFixed(5)}) ขณะมีกำไร +${profitPips.toFixed(1)} -> ล็อกกำไรทันทีก่อนราคาดีดกลับ!`
+      };
+    }
   }
 
   return { shouldExit: false };
