@@ -21,6 +21,13 @@ import {
   isFreqtradeMt5Authorized,
   processFreqtradeMt5Signal
 } from './services/freqtradeMt5Bridge.js';
+import {
+  startInstantProfitWatcher,
+  stopInstantProfitWatcher,
+  getInstantProfitWatcherStatus,
+  setInstantProfitWatcherConfig,
+  checkAndHarvestProfits
+} from './services/instantProfitWatcher.js';
 
 dotenv.config();
 
@@ -304,7 +311,8 @@ export async function getRealtimeState() {
     goldPositions,
     cryptoPositions,
     usMarketStatus: checkUSStockMarket(),
-    botRunning
+    botRunning,
+    instantProfitWatcher: getInstantProfitWatcherStatus()
   };
 }
 
@@ -353,6 +361,9 @@ function startDaemon() {
   // Start Fast 2.5-second Real-Time MT5 Position Sync
   startFastSync();
 
+  // Start 1-Minute Instant Profit Watcher & Guard
+  startInstantProfitWatcher();
+
   // First runs after server starts smoothly (staggered verification)
   setTimeout(() => {
     runScheduledScan();
@@ -392,6 +403,7 @@ function startDaemon() {
 function stopDaemon() {
   botRunning = false;
   stopFastSync();
+  stopInstantProfitWatcher();
   if (barSyncTimeout) {
     clearTimeout(barSyncTimeout);
     barSyncTimeout = null;
@@ -448,6 +460,29 @@ app.get('/api/realtime-state', async (_req, res) => {
     res.json(state);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Instant Profit Watcher & Guard REST APIs
+app.get('/api/instant-profit/status', (_req, res) => {
+  res.json(getInstantProfitWatcherStatus());
+});
+
+app.post('/api/instant-profit/trigger', async (_req, res) => {
+  try {
+    const result = await checkAndHarvestProfits();
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/instant-profit/toggle', (req, res) => {
+  try {
+    const updated = setInstantProfitWatcherConfig(req.body || {});
+    res.json({ success: true, config: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

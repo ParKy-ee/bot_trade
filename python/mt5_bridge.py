@@ -458,6 +458,7 @@ def get_positions():
             "tp": p.tp,
             "priceCurrent": p.price_current,
             "profit": p.profit,
+            "swap": getattr(p, "swap", 0.0),
             "comment": p.comment
         })
     return result
