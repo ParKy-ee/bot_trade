@@ -242,6 +242,7 @@ export async function initDatabase() {
         outcome_status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
         target_buy TINYINT(1) DEFAULT NULL,
         target_sell TINYINT(1) DEFAULT NULL,
+        market_state VARCHAR(16) DEFAULT NULL,
         label_method VARCHAR(32) DEFAULT NULL,
         labeled_at DATETIME DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -251,6 +252,14 @@ export async function initDatabase() {
         INDEX idx_forex_ml_session (session_name)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    const [marketStateCheck] = await p.execute(
+      `SELECT COUNT(*) AS count FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'forex_ml_observations' AND COLUMN_NAME = 'market_state'`,
+      [DB_NAME]
+    );
+    if (marketStateCheck[0].count === 0) {
+      await p.query('ALTER TABLE forex_ml_observations ADD COLUMN market_state VARCHAR(16) DEFAULT NULL');
+    }
 
     const [tradeSourceTagCheck] = await p.execute(
       `SELECT COUNT(*) AS count FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'trade_results' AND COLUMN_NAME = 'source_tag'`,

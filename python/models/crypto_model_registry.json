@@ -1,5 +1,5 @@
 {
-  "active_version": "v2.2.0",
+  "active_version": "v2.3.0",
   "market": "crypto",
   "versions": [
     {
@@ -386,6 +386,74 @@
         "brier_sell": 0.085
       },
       "gate_status": "PROMOTED"
+    },
+    {
+      "version": "v2.3.0",
+      "created_at": "2026-09-30T09:45:42.526561",
+      "description": "Retrained Crypto M5 Calibrated Tri-Ensemble with FIRST_TOUCH_V2 barrier labels (Binance BTC, ETH, SOL)",
+      "label_policy": "FIRST_TOUCH_V2",
+      "file": "versions/crypto_m5_model_v2.3.0.joblib",
+      "dataset": {
+        "source": "Binance Public REST API (Klines M5 - BTC, ETH, SOL)",
+        "symbols": [
+          "BTCUSDT",
+          "ETHUSDT",
+          "SOLUSDT"
+        ],
+        "total_samples": 8871,
+        "train_samples": 7095,
+        "test_samples": 1776,
+        "positive_rate_buy": 0.2504,
+        "positive_rate_sell": 0.2379
+      },
+      "architecture": "Calibrated Tri-Ensemble (LightGBM 40% + XGBoost 35% + Random Forest 25% with Sigmoid Calibration)",
+      "weights": {
+        "lightgbm": 0.4,
+        "xgboost": 0.35,
+        "random_forest": 0.25
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "ema_spread_50_200",
+        "macd_hist",
+        "volume_ratio",
+        "bb_width",
+        "btc_ret_5",
+        "btc_corr_divergence",
+        "is_weekend",
+        "vwap_distance_pct",
+        "distance_to_swing_high_low",
+        "funding_window_proximity"
+      ],
+      "metrics": {
+        "roc_auc_buy": 0.5622,
+        "roc_auc_sell": 0.5408,
+        "pr_auc_buy": 0.2927,
+        "pr_auc_sell": 0.2867,
+        "accuracy_buy": 0.7489,
+        "accuracy_sell": 0.7483,
+        "precision_buy": 0.0,
+        "precision_sell": 0.0,
+        "recall_buy": 0.0,
+        "recall_sell": 0.0,
+        "specificity_buy": 1.0,
+        "specificity_sell": 1.0,
+        "f1_buy": 0.0,
+        "f1_sell": 0.0,
+        "f2_buy": 0.0,
+        "f2_sell": 0.0,
+        "mcc_buy": 0.0,
+        "mcc_sell": 0.0,
+        "log_loss_buy": 0.5598,
+        "log_loss_sell": 0.5647,
+        "brier_buy": 0.1866,
+        "brier_sell": 0.1884
+      }
     }
   ]
 }

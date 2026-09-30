@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import urllib.request
+from forex_barrier_labels import label_forex_bars
 
 # Scikit-Learn Standard Model Evaluation Metrics
 from sklearn.metrics import (
@@ -85,10 +86,14 @@ def evaluate_model_standard_metrics():
 
     # Load & prepare test set (Holdout 20% Unseen Data)
     df = pd.read_csv(DATA_PATH)
-    atr_up = df['atr_pct'] * 1.5
-    atr_dn = df['atr_pct'] * 1.0
-    df['target_buy'] = np.where((df['target_ret_5'] >= atr_up) & (df['ret_1'] >= 0), 1, 0)
-    df['target_sell'] = np.where((df['target_ret_5'] <= -atr_dn) & (df['ret_1'] <= 0), 1, 0)
+    if bundle.get('label_policy') == 'FIRST_TOUCH_V2':
+        df = label_forex_bars(df)
+        df = df[df['market_state'] != 'AVOID']
+    else:
+        atr_up = df['atr_pct'] * 1.5
+        atr_dn = df['atr_pct'] * 1.0
+        df['target_buy'] = np.where((df['target_ret_5'] >= atr_up) & (df['ret_1'] >= 0), 1, 0)
+        df['target_sell'] = np.where((df['target_ret_5'] <= -atr_dn) & (df['ret_1'] <= 0), 1, 0)
 
     for c in ['csm_spread', 'h1_trend_slope', 'time_sin_hour', 'time_cos_hour']:
         if c not in df: df[c] = 0.0
@@ -133,7 +138,7 @@ def evaluate_model_standard_metrics():
         y_pred = (y_prob >= best_th).astype(int)
 
         # 1. Confusion Matrix
-        cm = confusion_matrix(y_true, y_pred)
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
         tn, fp, fn, tp = cm.ravel()
 
         # 2. Accuracy

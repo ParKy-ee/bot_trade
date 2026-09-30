@@ -114,13 +114,15 @@ export async function recordForexMlObservation({
   }
 }
 
-export async function labelForexMlObservations(pool, limit = 250) {
+export async function labelForexMlObservations(pool, limit = 250, { relabelLegacy = false, afterId = 0 } = {}) {
   if (!pool) return { labeled: 0, pending: 0 };
   const [pending] = await pool.query(
     `SELECT * FROM forex_ml_observations
-     WHERE outcome_status = 'PENDING'
-     ORDER BY bar_time ASC LIMIT ?`,
-    [Math.max(1, Math.min(1000, Number(limit) || 250))]
+     WHERE ${relabelLegacy ? "label_method = 'TRIPLE_BARRIER_V1' AND id > ?" : "outcome_status = 'PENDING'"}
+     ORDER BY ${relabelLegacy ? 'id' : 'bar_time'} ASC LIMIT ?`,
+    relabelLegacy
+      ? [afterId, Math.max(1, Math.min(1000, Number(limit) || 250))]
+      : [Math.max(1, Math.min(1000, Number(limit) || 250))]
   );
 
   let labeled = 0;
@@ -133,24 +135,54 @@ export async function labelForexMlObservations(pool, limit = 250) {
       [sample.symbol, sample.bar_time]
     );
     if (bars.length < 6) continue;
-
-    const entry = finiteNumber(sample.entry_price, finiteNumber(bars[0].close));
-    const atrPrice = Math.max(1e-12, entry * finiteNumber(sample.atr_pct));
-    const close5 = finiteNumber(bars[5].close, entry);
-    const buy = sample.ret_1 >= 0 && (close5 - entry) >= 1.5 * atrPrice ? 1 : 0;
-    const sell = sample.ret_1 <= 0 && (close5 - entry) <= -1.0 * atrPrice ? 1 : 0;
+    const barTime = new Date(sample.bar_time).getTime();
+    if (!Number.isFinite(barTime) || new Date(bars[0].time).getTime() !== barTime) continue;
+    const gap = bars.some((bar, i) => new Date(bar.time).getTime() !== barTime + i * 300000);
+    const bid = Number(bars[0].close);
+    const atrPrice = bid * Number(sample.atr_pct);
+    if (!Number.isFinite(bid) || !Number.isFinite(atrPrice) || atrPrice <= 0) continue;
+    // MT5 candles are bid OHLC. Estimate ask with the same fixed spread used
+    // by the captured spread_to_atr feature.
+    const spread = String(sample.symbol).toUpperCase().includes('JPY') ? 0.02 : 0.00015;
+    const outcomes = { BUY: 'TIMEOUT', SELL: 'TIMEOUT' };
+    for (const bar of gap ? [] : bars.slice(1)) {
+      const high = Number(bar.high);
+      const low = Number(bar.low);
+      if (!Number.isFinite(high) || !Number.isFinite(low)) {
+        outcomes.BUY = outcomes.SELL = 'AMBIGUOUS';
+        break;
+      }
+      if (outcomes.BUY === 'TIMEOUT') {
+        const tp = high >= bid + spread + 1.5 * atrPrice;
+        const sl = low <= bid + spread - atrPrice;
+        if (tp || sl) outcomes.BUY = tp && sl ? 'AMBIGUOUS' : tp ? 'WIN' : 'LOSS';
+      }
+      if (outcomes.SELL === 'TIMEOUT') {
+        const tp = low + spread <= bid - 1.5 * atrPrice;
+        const sl = high + spread >= bid + atrPrice;
+        if (tp || sl) outcomes.SELL = tp && sl ? 'AMBIGUOUS' : tp ? 'WIN' : 'LOSS';
+      }
+      if (outcomes.BUY !== 'TIMEOUT' && outcomes.SELL !== 'TIMEOUT') break;
+    }
+    const state = gap || outcomes.BUY === 'AMBIGUOUS' || outcomes.SELL === 'AMBIGUOUS' ||
+      (outcomes.BUY === 'WIN' && outcomes.SELL === 'WIN')
+      ? 'AVOID'
+      : outcomes.BUY === 'WIN' ? 'BUY'
+        : outcomes.SELL === 'WIN' ? 'SELL' : 'NO_TRADE';
+    const buy = state === 'BUY' ? 1 : 0;
+    const sell = state === 'SELL' ? 1 : 0;
 
     await pool.query(
       `UPDATE forex_ml_observations
-       SET outcome_status = 'LABELED', target_buy = ?, target_sell = ?,
-           label_method = 'TRIPLE_BARRIER_V1', labeled_at = NOW()
-       WHERE id = ? AND outcome_status = 'PENDING'`,
-      [buy, sell, sample.id]
+       SET outcome_status = 'LABELED', target_buy = ?, target_sell = ?, market_state = ?,
+           label_method = 'FIRST_TOUCH_V2', labeled_at = NOW()
+       WHERE id = ? AND ${relabelLegacy ? "label_method = 'TRIPLE_BARRIER_V1'" : "outcome_status = 'PENDING'"}`,
+      [buy, sell, state, sample.id]
     );
     labeled += 1;
   }
 
-  return { labeled, pending: pending.length - labeled };
+  return { labeled, pending: pending.length - labeled, scanned: pending.length, lastId: pending.at(-1)?.id ?? afterId };
 }
 
 export { FEATURE_COLUMNS, FEATURE_VERSION };

@@ -14,6 +14,7 @@ import joblib
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, accuracy_score, precision_score
 from lightgbm import LGBMClassifier
+from forex_barrier_labels import label_forex_bars
 
 warnings.filterwarnings("ignore")
 
@@ -34,12 +35,8 @@ def train_forex_model():
     df = pd.read_csv(DATA_PATH)
     print(f"[*] โหลดข้อมูล Forex M5 สำเร็จ: {len(df):,} แถว ({df['symbol'].nunique()} คู่เงิน)")
 
-    # 1. Feature Engineering & Clean Target
-    # For M5 Scalping: Target 1 = price moves favorably by >= 0.8 * ATR within 5 bars
-    # Target 0 = price stays flat or reverses
-    df['atr_thresh'] = df['atr_pct'] * 0.8
-    df['target_buy'] = (df['target_ret_5'] >= df['atr_thresh']).astype(int)
-    df['target_sell'] = (df['target_ret_5'] <= -df['atr_thresh']).astype(int)
+    # Label both executable directions from the first TP/SL touch.
+    df = label_forex_bars(df)
 
     feature_cols = [
         'ret_1', 'ret_5', 'rsi_14', 'atr_pct', 'adx_14',
@@ -47,7 +44,9 @@ def train_forex_model():
     ]
 
     # Drop NaN
-    clean_df = df.dropna(subset=feature_cols + ['target_buy', 'target_sell'])
+    clean_df = df[df['market_state'] != 'AVOID'].dropna(
+        subset=feature_cols + ['target_buy', 'target_sell']
+    ).sort_values('time')
     print(f"[*] ข้อมูลที่สมบูรณ์หลังคลีน: {len(clean_df):,} แถว")
     print(f"[*] สัดส่วนสัญญาณ Buy Scalp: {clean_df['target_buy'].mean():.1%}")
     print(f"[*] สัดส่วนสัญญาณ Sell Scalp: {clean_df['target_sell'].mean():.1%}")
@@ -127,6 +126,7 @@ def train_forex_model():
         "features": feature_cols,
         "auc_buy": auc_buy,
         "auc_sell": auc_sell,
+        "label_policy": "FIRST_TOUCH_V2",
         "trained_at": pd.Timestamp.now().isoformat()
     }
     joblib.dump(bundle, MODEL_PATH)

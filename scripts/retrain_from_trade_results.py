@@ -17,6 +17,7 @@ from sklearn.metrics import (
 from lightgbm import LGBMClassifier
 from xgboost import XGBClassifier
 from catboost import CatBoostClassifier
+from forex_barrier_labels import label_forex_bars
 
 warnings.filterwarnings('ignore')
 if sys.platform == 'win32':
@@ -54,7 +55,7 @@ def load_valid_observations():
         raw = pd.DataFrame(payload)
         required = [
             'symbol', 'bar_time', 'outcome_status', 'data_source', 'sample_kind',
-            'target_buy', 'target_sell', *FEATURE_COLS
+            'target_buy', 'target_sell', 'market_state', 'label_method', *FEATURE_COLS
         ]
         missing = [column for column in required if column not in raw.columns]
         if missing:
@@ -64,6 +65,8 @@ def load_valid_observations():
             (raw['outcome_status'] == 'LABELED') &
             (raw['data_source'] == 'mt5') &
             (raw['sample_kind'] != 'RANGE_EXCLUDED') &
+            (raw['label_method'] == 'FIRST_TOUCH_V2') &
+            (raw['market_state'] != 'AVOID') &
             (raw['target_buy'].notna()) &
             (raw['target_sell'].notna()) &
             (raw['symbol'].notna()) &
@@ -80,21 +83,7 @@ def load_valid_observations():
         return pd.DataFrame()
 
 def apply_triple_barrier_labeling(df):
-    """
-    Applies Triple Barrier Method:
-    - Upper Barrier (TP): +1.5 * ATR
-    - Lower Barrier (SL): -1.0 * ATR
-    - Horizontal Time Barrier: 5 bars
-    """
-    atr_up = df['atr_pct'] * 1.5
-    atr_dn = df['atr_pct'] * 1.0
-
-    target_buy = np.where((df['target_ret_5'] >= atr_up) & (df['ret_1'] >= 0), 1, 0)
-    target_sell = np.where((df['target_ret_5'] <= -atr_dn) & (df['ret_1'] <= 0), 1, 0)
-
-    df['target_buy'] = target_buy
-    df['target_sell'] = target_sell
-    return df
+    return label_forex_bars(df)
 
 def retrain_from_live_results(target_version=None, dry_run=False):
     print('=' * 75)
@@ -177,7 +166,9 @@ def retrain_from_live_results(target_version=None, dry_run=False):
         df_base['spread_to_atr'] = 0.02
 
     df_base['_event_time'] = pd.to_datetime(df_base.get('time'), errors='coerce', utc=True)
-    clean_base = df_base.dropna(subset=FEATURE_COLS + ['target_buy', 'target_sell'])
+    clean_base = df_base[df_base['market_state'] != 'AVOID'].dropna(
+        subset=FEATURE_COLS + ['target_buy', 'target_sell']
+    )
 
     # 2. Integrate Live Trade Results with Triple Barrier outcomes
     training_parts = []
@@ -185,49 +176,10 @@ def retrain_from_live_results(target_version=None, dry_run=False):
     base_part['_event_time'] = clean_base['_event_time'].values
     training_parts.append(base_part)
 
-    if len(df_live) >= 4:
-        win_rate = float(df_live['is_win'].mean())
-        print(f"✅ ทำการผสมข้อมูลผลการเทรดจริง ({len(df_live)} ไม้, Win Rate: {win_rate:.1%}) เข้าสู่ชุดฝึกสอน")
-        
-        df_live['ret_1'] = 0.0
-        df_live['ret_5'] = df_live['pips'].astype(float) * 0.0001
-        df_live['rsi_14'] = df_live['rsi'].astype(float)
-        df_live['atr_pct'] = df_live['atr'].astype(float) / (df_live['entry_price'].astype(float) + 1e-12)
-        df_live['adx_14'] = df_live['adx'].astype(float)
-        df_live['ema_spread_20_50'] = (df_live['ema21'].astype(float) - df_live['ema50'].astype(float)) / (df_live['entry_price'].astype(float) + 1e-12)
-        df_live['macd_hist'] = df_live['macd_hist'].astype(float)
-        df_live['csm_spread'] = 0.0
-        df_live['h1_trend_slope'] = 0.0
-
-        # Features for Phase 3
-        df_live['is_jpy'] = df_live['symbol'].astype(str).str.contains('JPY').astype(float)
-        try:
-            live_dt = pd.to_datetime(df_live['entry_time'], errors='coerce')
-            hrs = live_dt.dt.hour + (live_dt.dt.minute / 60.0)
-            df_live['time_sin_hour'] = np.sin(2 * np.pi * hrs / 24.0).fillna(0.0)
-            df_live['time_cos_hour'] = np.cos(2 * np.pi * hrs / 24.0).fillna(0.0)
-        except Exception:
-            df_live['time_sin_hour'] = 0.0
-            df_live['time_cos_hour'] = 0.0
-
-        spread_pips = np.where(df_live['is_jpy'] == 1.0, 0.02, 0.00015)
-        df_live['spread_to_atr'] = spread_pips / (df_live['atr'].astype(float) + 1e-12)
-
-        # Triple barrier labeling from realized trades:
-        # If BUY won, it hit upper barrier. If BUY lost, selling would have hit lower barrier.
-        df_live['target_buy'] = np.where((df_live['action'] == 'BUY') & (df_live['is_win'] == 1), 1, 0)
-        df_live['target_sell'] = np.where((df_live['action'] == 'SELL') & (df_live['is_win'] == 1), 1, 0)
-
-        # Weight realized trades x5, while retaining their chronological time.
-        df_live['_event_time'] = pd.to_datetime(df_live['entry_time'], errors='coerce', utc=True)
-        live_part = df_live[FEATURE_COLS + ['target_buy', 'target_sell', '_event_time']].copy()
-        live_samples = pd.concat([live_part] * OBSERVATION_WEIGHT, ignore_index=True)
-        training_parts.append(live_samples)
-        combined_df = pd.concat(training_parts, ignore_index=True)
-        print(f"[*] รวมชุดข้อมูลประวัติ + ประสบการณ์จริง: ทั้งหมด {len(combined_df):,} ตัวอย่าง")
-    else:
-        print(f"ℹ️ ข้อมูลผลการเทรดจริงยังมีน้อย ({len(df_live)} ไม้) ดำเนินการเทรนบนฐานข้อมูลประวัติศาสตร์เต็มรูปแบบ ({len(clean_base):,} แถว)")
-        combined_df = pd.concat(training_parts, ignore_index=True)
+    # Closed trades reveal only the side that was actually taken. Treating the
+    # untraded side as a loss would create false negative training labels.
+    if len(df_live):
+        print(f"ℹ️ ข้าม trade_results {len(df_live)} ไม้: ไม่มีผลของฝั่งตรงข้ามที่สังเกตได้")
 
     # Add the labeled observation stream.  These samples include SIGNAL,
     # REJECTED and NO_TRADE decisions, which gives Champion negative examples
@@ -261,7 +213,7 @@ def retrain_from_live_results(target_version=None, dry_run=False):
     ).reset_index(drop=True)
     print(
         f"[*] รวมข้อมูล historical {len(clean_base):,} + "
-        f"live {len(df_live):,} + observations {len(df_observations):,} "
+        f"live 0 (skipped {len(df_live):,}) + observations {len(df_observations):,} "
         f"(หลัง weighting รวม {len(combined_df):,} rows)"
     )
 
@@ -271,7 +223,8 @@ def retrain_from_live_results(target_version=None, dry_run=False):
             'success': True,
             'dry_run': True,
             'historical_samples': int(len(clean_base)),
-            'live_trade_samples': int(len(df_live)),
+            'live_trade_samples': 0,
+            'skipped_live_trade_samples': int(len(df_live)),
             'observation_samples': int(len(df_observations)),
             'observation_weight': OBSERVATION_WEIGHT,
             'weighted_total_samples': int(len(combined_df)),
@@ -442,10 +395,12 @@ def retrain_from_live_results(target_version=None, dry_run=False):
         'auc_buy': auc_buy,
         'auc_sell': auc_sell,
         'historical_samples_count': len(clean_base),
-        'live_samples_count': len(df_live),
+        'live_samples_count': 0,
+        'skipped_live_samples_count': len(df_live),
         'observation_samples_count': len(df_observations),
         'observation_weight': OBSERVATION_WEIGHT,
-        'training_source': 'dataset_forex_m5 + trade_results + forex_ml_observations',
+        'label_policy': 'FIRST_TOUCH_V2',
+        'training_source': 'dataset_forex_m5 + forex_ml_observations',
         'total_samples_count': len(combined_df),
         'trained_at': pd.Timestamp.now().isoformat()
     }
@@ -459,17 +414,18 @@ def retrain_from_live_results(target_version=None, dry_run=False):
         "version": next_ver,
         "created_at": bundle['trained_at'],
         "description": (
-            f"Retrained Tri-Ensemble incorporating {len(df_live)} live DB trades "
-            f"and {len(df_observations)} labeled Forex ML observations"
+            f"Retrained Tri-Ensemble with {len(df_observations)} first-touch Forex ML observations"
         ),
         "file": version_file_rel,
         "dataset": {
             "total_samples": len(combined_df),
             "historical_samples": len(clean_base),
-            "live_trade_samples": len(df_live),
+            "live_trade_samples": 0,
+            "skipped_live_trade_samples": len(df_live),
             "observation_samples": len(df_observations),
             "observation_weight": OBSERVATION_WEIGHT,
-            "training_source": "dataset_forex_m5 + trade_results + forex_ml_observations",
+            "label_policy": "FIRST_TOUCH_V2",
+            "training_source": "dataset_forex_m5 + forex_ml_observations",
             "train_samples": len(train_df),
             "test_samples": len(val_df),
             "positive_rate_buy": round(float(y_buy_val.mean()), 4),
@@ -529,7 +485,8 @@ def retrain_from_live_results(target_version=None, dry_run=False):
         "auc_buy": auc_buy,
         "auc_sell": auc_sell,
         "total_samples": len(combined_df),
-        "live_samples": len(df_live),
+        "live_samples": 0,
+        "skipped_live_samples": len(df_live),
         "observation_samples": len(df_observations),
         "observation_weight": OBSERVATION_WEIGHT,
         "architecture": bundle['architecture'],

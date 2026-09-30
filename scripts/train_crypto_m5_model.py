@@ -81,7 +81,10 @@ def train_crypto_model():
     df = pd.read_csv(DATA_PATH)
     print(f"[*] โหลดข้อมูล Crypto สำเร็จ: {len(df):,} แถว ({df['symbol'].nunique()} เหรียญ: {', '.join(df['symbol'].unique())})")
 
-    clean_df = df.dropna(subset=FEATURE_COLS + ['target_buy', 'target_sell']).copy()
+    # Label both executable directions from the first TP/SL touch in the next 5 bars
+    from crypto_barrier_labels import label_crypto_bars
+    df = label_crypto_bars(df)
+    clean_df = df[df['market_state'] != 'AVOID'].dropna(subset=FEATURE_COLS + ['target_buy', 'target_sell']).copy()
     
     # Time-based split per symbol to preserve market microstructure sequence
     train_dfs = []
@@ -180,10 +183,11 @@ def train_crypto_model():
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(VERSIONS_DIR, exist_ok=True)
 
-    version_str = "v2.1.0"
+    version_str = "v2.3.0"
     bundle = {
         "version": version_str,
         "market": "crypto",
+        "label_policy": "FIRST_TOUCH_V2",
         "lgb_buy": lgb_buy,
         "xgb_buy": xgb_buy,
         "rf_buy": rf_buy,
@@ -211,7 +215,8 @@ def train_crypto_model():
     registry_entry = {
         "version": version_str,
         "created_at": pd.Timestamp.now().isoformat(),
-        "description": "Retrained Crypto M5 Calibrated Tri-Ensemble with fresh Binance BTC, ETH, and SOL data",
+        "description": "Retrained Crypto M5 Calibrated Tri-Ensemble with FIRST_TOUCH_V2 barrier labels (Binance BTC, ETH, SOL)",
+        "label_policy": "FIRST_TOUCH_V2",
         "file": version_file,
         "dataset": {
             "source": "Binance Public REST API (Klines M5 - BTC, ETH, SOL)",

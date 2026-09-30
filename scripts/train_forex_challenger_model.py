@@ -21,6 +21,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from forex_barrier_labels import label_forex_bars
 
 warnings.filterwarnings('ignore')
 if sys.platform == 'win32':
@@ -76,12 +77,7 @@ def add_derived_features(df):
 
 
 def apply_labels(df):
-    df = df.copy()
-    atr_up = df['atr_pct'] * 1.5
-    atr_dn = df['atr_pct'] * 1.0
-    df['target_buy'] = np.where((df['target_ret_5'] >= atr_up) & (df['ret_1'] >= 0), 1, 0)
-    df['target_sell'] = np.where((df['target_ret_5'] <= -atr_dn) & (df['ret_1'] <= 0), 1, 0)
-    return df
+    return label_forex_bars(df)
 
 
 def evaluate(y_true, prob):
@@ -197,14 +193,16 @@ def load_valid_observations():
             return pd.DataFrame()
 
         raw = pd.DataFrame(payload)
-        required = ['outcome_status', 'data_source', 'sample_kind', 'target_buy', 'target_sell'] + FEATURE_COLS
+        required = ['outcome_status', 'data_source', 'sample_kind', 'label_method', 'market_state', 'target_buy', 'target_sell'] + FEATURE_COLS
         if any(col not in raw.columns for col in required):
             return pd.DataFrame()
 
         valid = raw[
             (raw['outcome_status'] == 'LABELED') &
             (raw['data_source'] == 'mt5') &
-            (raw['sample_kind'] != 'RANGE_EXCLUDED')
+            (raw['sample_kind'] != 'RANGE_EXCLUDED') &
+            (raw['label_method'] == 'FIRST_TOUCH_V2') &
+            (raw['market_state'] != 'AVOID')
         ].copy()
         if len(valid) < 4:
             return pd.DataFrame()
@@ -248,8 +246,14 @@ def main(target_version=None, use_observations=True, use_live=False, obs_weight=
         return 1
 
     df = add_derived_features(apply_labels(pd.read_csv(DATA_PATH)))
-    clean_base = df.dropna(subset=FEATURE_COLS + ['target_buy', 'target_sell']).reset_index(drop=True)
-    live = load_valid_live_results() if use_live else pd.DataFrame()
+    clean_base = df[df['market_state'] != 'AVOID'].dropna(
+        subset=FEATURE_COLS + ['target_buy', 'target_sell']
+    ).sort_values('time').reset_index(drop=True)
+    # A closed trade observes only its executed side; it cannot supply a
+    # paired BUY/SELL outcome without counterfactual bar replay.
+    if use_live:
+        print('ℹ️ ข้าม trade_results: ไม่มีผลของฝั่งตรงข้ามที่สังเกตได้')
+    live = pd.DataFrame()
     observations = load_valid_observations() if use_observations else pd.DataFrame()
     live_trade_samples = int((live['market_type'] == 'forex').sum()) if not live.empty and 'market_type' in live.columns else 0
     shadow_trade_samples = int((live['market_type'] == 'forex_shadow').sum()) if not live.empty and 'market_type' in live.columns else 0
@@ -337,6 +341,7 @@ def main(target_version=None, use_observations=True, use_live=False, obs_weight=
         'features': FEATURE_COLS,
         'parameters': params,
         'metrics': metrics,
+        'label_policy': 'FIRST_TOUCH_V2',
         'dataset': {
             'total_samples': int(len(clean)),
             'train_samples': int(len(train_df)),
@@ -346,7 +351,7 @@ def main(target_version=None, use_observations=True, use_live=False, obs_weight=
             'live_trade_samples': live_trade_samples,
             'shadow_trade_samples': shadow_trade_samples,
             'observation_samples': observation_samples,
-            'source_mode': 'trade_results_plus_observations' if use_observations else 'trade_results_compatibility',
+            'source_mode': 'clean_base_plus_mt5_observations' if use_observations else 'base_historical',
             'mixed_sources': [list(source) for source in sorted(MIXED_SOURCES)],
         },
         'trained_at': trained_at,
@@ -407,7 +412,7 @@ def main(target_version=None, use_observations=True, use_live=False, obs_weight=
         'live_trade_samples': live_trade_samples,
         'shadow_trade_samples': shadow_trade_samples,
         'observation_samples': observation_samples,
-        'source_mode': 'clean_base_plus_mt5_observations' if (use_observations and not use_live) else ('trade_results_plus_observations' if use_observations else 'base_historical'),
+        'source_mode': 'clean_base_plus_mt5_observations' if use_observations else 'base_historical',
         'mixed_sources': [list(source) for source in sorted(MIXED_SOURCES)],
         'total_samples': int(len(clean))
     }, ensure_ascii=False))
