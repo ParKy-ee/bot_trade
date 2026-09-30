@@ -21,6 +21,9 @@ dotenv.config();
 // It relaxes performance/frequency throttles only; broker/duplicate/geometry
 // guards remain active below.
 const DATA_HARVEST_LIVE_MODE = process.env.FOREX_DATA_HARVEST_LIVE_MODE === 'true';
+// In this mode the model selects BUY/SELL from raw directional scores. The
+// separate Market Pressure model must then confirm the selected direction.
+const RAW_MODEL_MARKET_CONFIRM_ENABLED = process.env.FOREX_RAW_MODEL_MARKET_CONFIRM_ENABLED === 'true';
 const DATA_HARVEST_CONFIDENCE_THRESHOLD = Number(
   process.env.FOREX_DATA_HARVEST_CONFIDENCE_THRESHOLD || 0.20
 );
@@ -92,6 +95,14 @@ function getRawDirectionalThreshold(action) {
     : POCKET_EVAL_PROD_SELL_THRESHOLD;
 }
 
+function getRawModelDirection(modelMeta) {
+  if (!modelMeta || modelMeta.modelAvailable === false) return null;
+  const rawBuy = Number(modelMeta.raw_buy);
+  const rawSell = Number(modelMeta.raw_sell);
+  if (!Number.isFinite(rawBuy) || !Number.isFinite(rawSell) || rawBuy === rawSell) return null;
+  return rawBuy > rawSell ? 'BUY' : 'SELL';
+}
+
 const RANGE_MODEL_ENABLED = process.env.FOREX_RANGE_MODEL_ENABLED === 'true';
 const RANGE_LIVE_ENABLED = process.env.FOREX_RANGE_LIVE_ENABLED === 'true';
 const RANGE_MODEL_SOURCE = 'forex_range';
@@ -123,6 +134,7 @@ const MODEL_CONFIG_HASH = createHash('sha256').update(JSON.stringify({
   primaryRole: PRIMARY_MODEL_ROLE,
   shadowRole: SHADOW_MODEL_ROLE,
   liveProductionGuard: LIVE_PRODUCTION_GUARD,
+  rawModelMarketConfirm: RAW_MODEL_MARKET_CONFIRM_ENABLED,
   pocketEvalExpiryMinutes: POCKET_EVAL_EXPIRY_MINUTES,
   pocketProdBuyThreshold: POCKET_EVAL_PROD_BUY_THRESHOLD,
   pocketProdSellThreshold: POCKET_EVAL_PROD_SELL_THRESHOLD,
@@ -1583,6 +1595,10 @@ export async function executeForexScanCycle() {
     let shadowMlMeta = null;
     let primaryModelError = false;
     let forexFeatures = null;
+    let rawModelDirection = null;
+    let rawModelScore = 0;
+    let rawModelThreshold = null;
+    let rawModelSignal = false;
     let h1TrendSlope = 0;
     let rangeSetup = null;
     let rangeMlMeta = null;
@@ -1614,7 +1630,7 @@ export async function executeForexScanCycle() {
       });
       h1TrendSlope = Number(forexFeatures.h1_trend_slope || 0) / 100;
 
-      if (qualified && activeTrack !== 'RANGE_MEAN_REVERSION') {
+      if (RAW_MODEL_MARKET_CONFIRM_ENABLED || (qualified && activeTrack !== 'RANGE_MEAN_REVERSION')) {
         const mlRes = await predictPrimaryForex({ ...forexFeatures, direction: bias || 'BUY' });
         mlMeta = mlRes;
         if (PRIMARY_MODEL_ROLE === 'challenger') challengerMlMeta = mlRes;
@@ -1624,6 +1640,29 @@ export async function executeForexScanCycle() {
           console.warn(`[Forex Model Gate] ${symbol}: Python model unavailable; blocking live entry`);
         }
         confidence = mlRes?.confidence || 0.50;
+
+        if (RAW_MODEL_MARKET_CONFIRM_ENABLED) {
+          rawModelDirection = getRawModelDirection(mlRes);
+          if (rawModelDirection) {
+            rawModelScore = getDirectionalModelScore(mlRes, rawModelDirection);
+            rawModelThreshold = getRawDirectionalThreshold(rawModelDirection);
+            rawModelSignal = rawModelScore >= rawModelThreshold;
+            bias = rawModelDirection;
+            const relativeScore = Number(mlRes?.[rawModelDirection === 'BUY' ? 'rel_buy' : 'rel_sell']);
+            const rawScoreTotal = Number(mlRes?.raw_buy) + Number(mlRes?.raw_sell);
+            confidence = Number.isFinite(relativeScore)
+              ? relativeScore
+              : (rawScoreTotal > 0 ? rawModelScore / rawScoreTotal : 0.50);
+            qualified = rawModelSignal;
+            activeTrack = rawModelSignal ? 'MODEL_RAW_DIRECTIONAL' : 'MODEL_RAW_BELOW_THRESHOLD';
+            reasons.push(`Raw model selected ${rawModelDirection}: ${rawModelScore.toFixed(4)} / ${rawModelThreshold.toFixed(4)}`);
+          } else {
+            bias = null;
+            qualified = false;
+            activeTrack = 'MODEL_RAW_NO_DIRECTION';
+            reasons.push('Raw model did not provide distinct BUY/SELL scores');
+          }
+        }
 
         if (process.env.FOREX_SHADOW_HARVESTING === 'true') {
           try {
@@ -1663,7 +1702,7 @@ export async function executeForexScanCycle() {
 
     // Range expert is a separate mean-reversion path. It can qualify a
     // sideway setup without replacing an already-qualified trend setup.
-    if (RANGE_LIVE_ENABLED && !qualified && rangeIsSignal) {
+    if (!RAW_MODEL_MARKET_CONFIRM_ENABLED && RANGE_LIVE_ENABLED && !qualified && rangeIsSignal) {
       qualified = true;
       bias = rangeSetup.action;
       activeTrack = 'RANGE_MEAN_REVERSION';
@@ -1677,7 +1716,7 @@ export async function executeForexScanCycle() {
     let patternBonus = 0;
     let entryMode = 'DEFAULT';
     let entryPrice = currPrice;
-    let slAnchorPrice = filterResult?.reversalPivotPrice || null;
+    let slAnchorPrice = RAW_MODEL_MARKET_CONFIRM_ENABLED ? null : (filterResult?.reversalPivotPrice || null);
     if (activeTrack === 'REVERSAL_CONVICTION') {
       entryMode = 'REVERSAL_LIMIT';
       patternBonus += 0.08; // +8% Conf for verified reversal setup
@@ -1805,28 +1844,34 @@ export async function executeForexScanCycle() {
     const signalConfidenceThreshold = DATA_HARVEST_LIVE_MODE
       ? DATA_HARVEST_CONFIDENCE_THRESHOLD
       : (dynamicExitEnabled ? Number(process.env.FOREX_DYNAMIC_CONFIDENCE_THRESHOLD || CONFIDENCE_THRESHOLD) : CONFIDENCE_THRESHOLD);
-    const primaryUsesRawDirectionalScore = process.env.FOREX_USE_RAW_SCORE === 'true';
-    const primaryEntryScore = primaryUsesRawDirectionalScore
-      ? primaryDirectionalScore
-      : confidence;
-    const primaryEntryThreshold = primaryUsesRawDirectionalScore
-      ? getRawDirectionalThreshold(bias)
-      : signalConfidenceThreshold;
+    const primaryUsesRawDirectionalScore = RAW_MODEL_MARKET_CONFIRM_ENABLED || process.env.FOREX_USE_RAW_SCORE === 'true';
+    const primaryEntryScore = RAW_MODEL_MARKET_CONFIRM_ENABLED
+      ? rawModelScore
+      : (primaryUsesRawDirectionalScore ? primaryDirectionalScore : confidence);
+    const primaryEntryThreshold = RAW_MODEL_MARKET_CONFIRM_ENABLED
+      ? (rawModelThreshold ?? 0)
+      : (primaryUsesRawDirectionalScore ? getRawDirectionalThreshold(bias) : signalConfidenceThreshold);
 
     let isSignal = !primaryModelError
-      && qualified
-      && (primaryEntryScore >= primaryEntryThreshold)
+      && (RAW_MODEL_MARKET_CONFIRM_ENABLED
+        ? rawModelSignal
+        : (qualified && primaryEntryScore >= primaryEntryThreshold))
       && (bias === 'BUY' || bias === 'SELL');
 
     const liveProductionConfidenceThreshold = bias === 'BUY'
       ? POCKET_EVAL_PROD_BUY_THRESHOLD
       : POCKET_EVAL_PROD_SELL_THRESHOLD;
-    const liveProductionScore = primaryDirectionalScore;
+    const liveProductionScore = RAW_MODEL_MARKET_CONFIRM_ENABLED ? rawModelScore : primaryDirectionalScore;
     const liveRawScoreGuardEnabled = LIVE_PRODUCTION_GUARD && primaryUsesRawDirectionalScore;
 
     if (liveRawScoreGuardEnabled && isSignal && liveProductionScore < liveProductionConfidenceThreshold) {
       isSignal = false;
       reasons.push(`Production score ${liveProductionScore.toFixed(4)} < ${liveProductionConfidenceThreshold.toFixed(4)} (หลังคำนวณ Market Pressure +/-)`);
+    }
+
+    if (RAW_MODEL_MARKET_CONFIRM_ENABLED && isSignal && (!isPressureConfirmed || isCounterPressure)) {
+      isSignal = false;
+      reasons.push(`Market Pressure did not confirm model direction (${marketPressure?.state || 'unavailable'})`);
     }
 
     // Counter-pressure hard veto (safety shield)
@@ -2312,9 +2357,19 @@ export async function executeForexScanCycle() {
     if (primaryModelError) decisionReasons.push('primary_model_error');
     if (!qualified) decisionReasons.push('setup_not_qualified');
     if (!['BUY', 'SELL'].includes(String(bias || '').toUpperCase())) decisionReasons.push('no_valid_direction');
-    if (primaryEntryScore < primaryEntryThreshold) {
+    if (RAW_MODEL_MARKET_CONFIRM_ENABLED && !rawModelSignal) {
+      decisionReasons.push(rawModelDirection
+        ? `raw_${rawModelDirection.toLowerCase()} ${rawModelScore.toFixed(4)} < ${(rawModelThreshold ?? 0).toFixed(4)}`
+        : 'raw_model_no_direction');
+    } else if (!RAW_MODEL_MARKET_CONFIRM_ENABLED && primaryEntryScore < primaryEntryThreshold) {
       const scoreLabel = primaryUsesRawDirectionalScore ? `raw_${String(bias || '').toLowerCase()}` : 'confidence';
       decisionReasons.push(`${scoreLabel} ${primaryEntryScore.toFixed(4)} < ${primaryEntryThreshold.toFixed(4)}`);
+    }
+    if (RAW_MODEL_MARKET_CONFIRM_ENABLED && rawModelSignal && !isPressureConfirmed) {
+      decisionReasons.push(`market_pressure_not_confirmed (${marketPressure?.state || 'unavailable'})`);
+    }
+    if (RAW_MODEL_MARKET_CONFIRM_ENABLED && isCounterPressure) {
+      decisionReasons.push('counter_pressure_veto');
     }
     if (liveRawScoreGuardEnabled && liveProductionScore < liveProductionConfidenceThreshold) {
       decisionReasons.push(`raw_${String(bias || '').toLowerCase()} ${liveProductionScore.toFixed(4)} < ${liveProductionConfidenceThreshold.toFixed(4)}`);
@@ -2333,7 +2388,7 @@ export async function executeForexScanCycle() {
       : '-';
     console.log(
       `[FOREX MODEL DECISION] ${cleanName} | primary=${primaryMetaLabel} | bias=${bias || '-'} | ` +
-      `conf=${formatModelScore(mlMeta?.confidence ?? confidence)} | ` +
+      `conf=${formatModelScore(RAW_MODEL_MARKET_CONFIRM_ENABLED ? confidence : (mlMeta?.confidence ?? confidence))} | ` +
       `raw_buy=${formatModelScore(mlMeta?.raw_buy)} raw_sell=${formatModelScore(mlMeta?.raw_sell)} | ` +
       `prod_score=${formatModelScore(liveProductionScore)} threshold=${formatModelScore(primaryEntryThreshold)} | ` +
       `result=${isSignal ? 'MT5_LIVE_READY' : 'SHADOW_ONLY'} | ` +

@@ -172,8 +172,8 @@ export function calculateDynamicForexExit({
   const minBrokerDistancePips = Math.max(0, Number(options.minBrokerDistancePips || 0));
   // A configured floor below 1.15 allows a sub-1:1 trade to pass despite the
   // strategy's recent realized win rate being well below its break-even level.
-  const configuredMinRiskReward = finiteNumber(options.minRiskReward ?? (entryMode === 'BREAKOUT' ? 1.3 : 1.15));
-  const minRiskReward = Math.max(1.15, configuredMinRiskReward ?? 1.15);
+  const configuredMinRiskReward = finiteNumber(options.minRiskReward ?? (entryMode === 'BREAKOUT' ? 0.4 : 0.25));
+  const minRiskReward = Math.max(0.1, configuredMinRiskReward ?? 0.25);
 
   const swings = findForexSwingLevels(bars, { lookbackBars, pivotStrength });
   const resistance = nearestResistance(swings.pivotHighs, entry) ?? (

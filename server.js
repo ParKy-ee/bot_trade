@@ -750,6 +750,7 @@ app.get('/api/forex/status', (_req, res) => {
     challengerModelVersion: process.env.FOREX_CHALLENGER_MODEL_VERSION || 'challenger-v1.0.0',
     primaryModelRole: process.env.FOREX_PRIMARY_MODEL_ROLE || 'champion',
     shadowModelRole: process.env.FOREX_SHADOW_MODEL_ROLE || 'challenger',
+    rawModelMarketConfirmEnabled: process.env.FOREX_RAW_MODEL_MARKET_CONFIRM_ENABLED === 'true',
     liveProductionGuard: process.env.FOREX_LIVE_PRODUCTION_GUARD === 'true',
     cryptoLiveEnabled: process.env.CRYPTO_LIVE_ENABLED === 'true',
     pocketEvaluation: {
