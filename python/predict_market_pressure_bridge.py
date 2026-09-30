@@ -13,7 +13,18 @@ import numpy as np
 warnings.filterwarnings('ignore')
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_MODEL_VERSION = os.environ.get('FOREX_MARKET_PRESSURE_MODEL_VERSION', 'v1.1.0')
+REGISTRY_PATH = os.path.join(ROOT_DIR, 'python', 'models', 'market_pressure_registry.json')
+
+default_version = 'v1.1.0'
+if os.path.exists(REGISTRY_PATH):
+    try:
+        with open(REGISTRY_PATH, 'r', encoding='utf-8') as f:
+            reg_data = json.load(f)
+            default_version = reg_data.get('active_version', default_version)
+    except Exception:
+        pass
+
+_MODEL_VERSION = os.environ.get('FOREX_MARKET_PRESSURE_MODEL_VERSION', default_version)
 if not _MODEL_VERSION.endswith('.joblib'):
     if not _MODEL_VERSION.startswith('forex_market_pressure_'):
         _MODEL_FILE = f"forex_market_pressure_{_MODEL_VERSION}.joblib"
@@ -23,7 +34,9 @@ else:
     _MODEL_FILE = _MODEL_VERSION
 
 MODEL_PATH = os.path.join(ROOT_DIR, 'python', 'models', _MODEL_FILE)
-# Fallback to v1.0.0 if chosen version not found
+# Fallback to v1.1.0 or v1.0.0 if chosen version not found
+if not os.path.exists(MODEL_PATH):
+    MODEL_PATH = os.path.join(ROOT_DIR, 'python', 'models', 'forex_market_pressure_v1.1.0.joblib')
 if not os.path.exists(MODEL_PATH):
     MODEL_PATH = os.path.join(ROOT_DIR, 'python', 'models', 'forex_market_pressure_v1.0.0.joblib')
 

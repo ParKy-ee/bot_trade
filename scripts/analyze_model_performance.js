@@ -19,15 +19,15 @@ async function run() {
       COUNT(*) as total,
       SUM(CASE WHEN exit_reason != 'OPEN' AND exit_price IS NOT NULL THEN 1 ELSE 0 END) as closed,
       SUM(CASE WHEN exit_reason = 'OPEN' OR exit_price IS NULL THEN 1 ELSE 0 END) as open,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 0 OR profit_loss < 0 OR pips < 0) THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
-        SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 /
         NULLIF(SUM(CASE WHEN exit_reason != 'OPEN' AND exit_price IS NOT NULL THEN 1 ELSE 0 END), 0),
         2
       ) as win_rate_pct,
       ROUND(
-        SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 0 OR profit_loss < 0 OR pips < 0) THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss <= 0 THEN 1 ELSE 0 END) * 100.0 /
         NULLIF(SUM(CASE WHEN exit_reason != 'OPEN' AND exit_price IS NOT NULL THEN 1 ELSE 0 END), 0),
         2
       ) as loss_rate_pct,

@@ -30,10 +30,10 @@ async function main() {
     SELECT 
       exit_reason, 
       COUNT(*) as count,
-      SUM(CASE WHEN is_win = 1 OR profit_loss > 0 OR pips > 0 THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN is_win = 0 OR profit_loss < 0 OR pips < 0 THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
-        SUM(CASE WHEN is_win = 1 OR profit_loss > 0 OR pips > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*),
+        SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*),
         1
       ) as win_rate_pct,
       ROUND(SUM(pips), 1) as total_pips,

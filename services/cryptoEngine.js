@@ -453,7 +453,7 @@ export async function executeCryptoScanCycle() {
           bars: m5Bars,
           atr,
           pipSize: 1.0,
-          holdMinutes,
+          holdMinutes: heldMinutes,
           minProfitAtrMult: 0.45,
           minHoldMinutes: 5
         });

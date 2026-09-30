@@ -21,10 +21,10 @@ async function main() {
       COUNT(*) as total_orders,
       SUM(CASE WHEN exit_reason != 'OPEN' THEN 1 ELSE 0 END) as closed_orders,
       SUM(CASE WHEN exit_reason = 'OPEN' THEN 1 ELSE 0 END) as open_orders,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 0 OR profit_loss < 0 OR pips < 0) THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
-        SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 /
         NULLIF(SUM(CASE WHEN exit_reason != 'OPEN' THEN 1 ELSE 0 END), 0),
         1
       ) as win_rate_pct,
@@ -53,10 +53,10 @@ async function main() {
       model_source,
       model_version,
       COUNT(*) as total_orders,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 0 OR profit_loss < 0 OR pips < 0) THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
-        SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 /
         NULLIF(SUM(CASE WHEN exit_reason != 'OPEN' THEN 1 ELSE 0 END), 0),
         1
       ) as win_rate_pct,
@@ -77,10 +77,10 @@ async function main() {
     SELECT
       exit_reason,
       COUNT(*) as count,
-      SUM(is_win = 1 OR profit_loss > 0 OR pips > 0) as wins,
-      SUM(is_win = 0 OR profit_loss < 0 OR pips < 0) as losses,
+      SUM(profit_loss > 0) as wins,
+      SUM(profit_loss <= 0) as losses,
       ROUND(
-        SUM(is_win = 1 OR profit_loss > 0 OR pips > 0) * 100.0 / COUNT(*),
+        SUM(profit_loss > 0) * 100.0 / COUNT(*),
         1
       ) as win_rate_pct,
       ROUND(SUM(pips), 1) as net_pips,
@@ -102,10 +102,10 @@ async function main() {
       DATE(entry_time) as date,
       market_type,
       COUNT(*) as total_orders,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 0 OR profit_loss < 0 OR pips < 0) THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
-        SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 /
         NULLIF(SUM(CASE WHEN exit_reason != 'OPEN' THEN 1 ELSE 0 END), 0),
         1
       ) as win_rate_pct,

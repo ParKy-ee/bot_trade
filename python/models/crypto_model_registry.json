@@ -1,5 +1,5 @@
 {
-  "active_version": "v2.1.0",
+  "active_version": "v2.2.0",
   "market": "crypto",
   "versions": [
     {
@@ -313,6 +313,79 @@
         "brier_buy": 0.0849,
         "brier_sell": 0.1074
       }
+    },
+    {
+      "version": "v2.2.0",
+      "created_at": "2026-09-30T06:58:34.018800",
+      "description": "Crypto M5 Calibrated Tri-Ensemble retrained with fresh Binance data + 136 strict-profit closed trades",
+      "file": "versions/crypto_m5_model_v2.2.0.joblib",
+      "dataset": {
+        "source": "Binance Klines M5 + trade_results",
+        "symbols": [
+          "BTCUSDT",
+          "ETHUSDT",
+          "SOLUSDT"
+        ],
+        "historical_samples": 8922,
+        "live_trade_samples": 136,
+        "total_samples": 9058,
+        "train_samples": 7461,
+        "test_samples": 1813,
+        "positive_rate_buy": 0.1055,
+        "positive_rate_sell": 0.1111,
+        "label_policy": "strict_profit_net_usd_gt_0",
+        "ambiguous_rows_excluded": 53,
+        "incomplete_features_excluded": 791
+      },
+      "architecture": "Calibrated Tri-Ensemble (LightGBM 40% + XGBoost 35% + Random Forest 25% with Sigmoid Calibration)",
+      "weights": {
+        "lightgbm": 0.4,
+        "xgboost": 0.35,
+        "random_forest": 0.25
+      },
+      "features": [
+        "ret_1",
+        "ret_5",
+        "rsi_14",
+        "atr_pct",
+        "adx_14",
+        "ema_spread_20_50",
+        "ema_spread_50_200",
+        "macd_hist",
+        "volume_ratio",
+        "bb_width",
+        "btc_ret_5",
+        "btc_corr_divergence",
+        "is_weekend",
+        "vwap_distance_pct",
+        "distance_to_swing_high_low",
+        "funding_window_proximity"
+      ],
+      "metrics": {
+        "roc_auc_buy": 0.7895,
+        "roc_auc_sell": 0.8137,
+        "pr_auc_buy": 0.2497,
+        "pr_auc_sell": 0.2951,
+        "accuracy_buy": 0.8869,
+        "accuracy_sell": 0.8935,
+        "precision_buy": 0.5,
+        "precision_sell": 0.0,
+        "recall_buy": 0.0098,
+        "recall_sell": 0.0,
+        "specificity_buy": 0.9988,
+        "specificity_sell": 1.0,
+        "f1_buy": 0.0191,
+        "f1_sell": 0.0,
+        "f2_buy": 0.0121,
+        "f2_sell": 0.0,
+        "mcc_buy": 0.0575,
+        "mcc_sell": 0.0,
+        "log_loss_buy": 0.3065,
+        "log_loss_sell": 0.2807,
+        "brier_buy": 0.0934,
+        "brier_sell": 0.085
+      },
+      "gate_status": "PROMOTED"
     }
   ]
 }

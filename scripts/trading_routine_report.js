@@ -37,7 +37,7 @@ async function runRoutineReport() {
       SUM(CASE WHEN exit_reason NOT IN ('OPEN', 'CLOSED_EXPIRED', 'CLOSED_HISTORICAL')
                     AND exit_price IS NOT NULL AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
       SUM(CASE WHEN exit_reason NOT IN ('OPEN', 'CLOSED_EXPIRED', 'CLOSED_HISTORICAL')
-                    AND exit_price IS NOT NULL AND profit_loss < 0 THEN 1 ELSE 0 END) as losses,
+                    AND exit_price IS NOT NULL AND profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
         SUM(CASE WHEN exit_reason NOT IN ('OPEN', 'CLOSED_EXPIRED', 'CLOSED_HISTORICAL')
                       AND exit_price IS NOT NULL AND profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 /

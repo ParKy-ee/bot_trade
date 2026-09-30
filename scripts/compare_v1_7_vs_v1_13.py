@@ -79,7 +79,7 @@ def test_on_recent_trades():
 
     X = df[FEATURE_COLS].fillna(0.0).values
     pips = df['pips'].astype(float).values
-    is_win = (df['is_win'] == 1) | (pips > 0)
+    is_win = (pd.to_numeric(df['profit_loss'], errors='coerce') > 0).values
     action = df['action'].values
 
     m_1_7, m_1_13 = load_models()

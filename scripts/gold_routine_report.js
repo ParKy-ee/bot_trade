@@ -25,10 +25,10 @@ async function runGoldRoutine() {
       COALESCE(model_source, 'rule_based') as model_src,
       COALESCE(model_version, 'default') as model_ver,
       COUNT(*) as total_orders,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 0 OR profit_loss < 0 OR pips < 0) THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
-        SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 /
         NULLIF(SUM(CASE WHEN exit_reason != 'OPEN' AND exit_price IS NOT NULL THEN 1 ELSE 0 END), 0), 2
       ) as win_rate_pct,
       ROUND(SUM(profit_loss), 2) as net_usd,
@@ -52,10 +52,10 @@ async function runGoldRoutine() {
     SELECT
       DATE_FORMAT(entry_time, '%Y-%m-%d') as trade_date,
       COUNT(*) as total_trades,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) as wins,
-      SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 0 OR profit_loss < 0 OR pips < 0) THEN 1 ELSE 0 END) as losses,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss <= 0 THEN 1 ELSE 0 END) as losses,
       ROUND(
-        SUM(CASE WHEN exit_reason != 'OPEN' AND (is_win = 1 OR profit_loss > 0 OR pips > 0) THEN 1 ELSE 0 END) * 100.0 /
+        SUM(CASE WHEN exit_reason != 'OPEN' AND profit_loss > 0 THEN 1 ELSE 0 END) * 100.0 /
         NULLIF(COUNT(*), 0), 2
       ) as win_rate_pct,
       ROUND(SUM(profit_loss), 2) as net_usd,
